@@ -1,0 +1,40 @@
+{
+  "name": "DWDM Physical Variant 08 - Excel row 8",
+  "nodes": [
+    {
+      "node_id": "NODE_A",
+      "name": "Node A",
+      "node_type": "terminal",
+      "latitude": 55.7558,
+      "longitude": 37.6173,
+      "territory": "Moscow",
+      "organization": "JSC Backbone Optical Network, Moscow hub"
+    },
+    {
+      "node_id": "NODE_B",
+      "name": "Node B",
+      "node_type": "terminal",
+      "latitude": 55.7558,
+      "longitude": 48.01513238876359,
+      "territory": "Republic of Tatarstan, West Segment",
+      "organization": "JSC Backbone Optical Network, Tatarstan branch"
+    }
+  ],
+  "line_channel": {
+    "fiber_type": "G.655",
+    "attenuation_db_per_km": 0.22,
+    "splice_interval_km": 24.0,
+    "splice_losses_db": 0.02,
+    "connector_losses_db": 0.35,
+    "line_reserve_db": 9.0,
+    "trace_mode": "roads",
+    "wavelength_nm": 1440.0,
+    "bitrate_gbps": 10.0,
+    "tx_power_dbm": 0.0,
+    "rx_sensitivity_dbm": -33.0,
+    "energy_budget_db": 33.0
+  },
+  "fibers": [],
+  "channels": [],
+  "equipment": []
+}
