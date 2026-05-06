@@ -1,123 +1,163 @@
 """
-Расчёт хроматической дисперсии в волоконно-оптических линиях связи.
+Расчёт хроматической дисперсии (ХД) и поляризационной модовой дисперсии (ПМД)
+для DWDM-каналов.
 
-Хроматическая дисперсия — расширение оптического импульса при распространении
-из-за различной групповой скорости спектральных составляющих. Уширение импульса:
-
-    τ_chr = |D(λ)| · Δλ · L  [пс]
-
-где D(λ) — коэффициент хроматической дисперсии (пс/(нм·км)),
-Δλ — спектральная ширина источника (нм), L — длина (км).
-
-Литература:
-[1] Fibotelecom.ru — Хроматическая дисперсия в оптическом волокне
-[2] Студопедия — Измерение хроматической дисперсии
-[3] ITU-T G.652, G.653, G.655 — Характеристики одномодовых волокон
-[4] IEC/TR 61282-7 — Статистический расчёт хроматической дисперсии
+Методика:
+  Накопленная ХД:  D_total = Σ D(λ,тип) · L_i   [пс/нм]
+  ПМД (RSS-метод): Δτ_PMD  = √(Σ (D_pmd_i · √L_i)²)  [пс]
 """
-from typing import List, Optional, Tuple
+from __future__ import annotations
 
-from core.models.network import Network
-from core.models.fiber import Fiber
+import math
+from dataclasses import dataclass, field
+from typing import Dict, List, Tuple
+
 from core.models.channel import Channel
+from core.models.fiber import Fiber, FiberType
+from core.models.network import Network
 
 
-def estimate_spectral_width_nm(bitrate_gbps: float) -> float:
+_CD_COEFF: Dict[FiberType, float] = {
+    FiberType.G652: 17.0,
+    FiberType.G653: 0.0,
+    FiberType.G654: 18.0,
+    FiberType.G655: 4.0,
+    FiberType.G656: 7.0,
+    FiberType.G657: 17.0,
+}
+
+_CD_SLOPE: Dict[FiberType, float] = {
+    FiberType.G652: 0.067,
+    FiberType.G653: 0.075,
+    FiberType.G654: 0.020,
+    FiberType.G655: 0.045,
+    FiberType.G656: 0.045,
+    FiberType.G657: 0.067,
+}
+
+_PMD_COEFF: Dict[FiberType, float] = {
+    FiberType.G652: 0.10,
+    FiberType.G653: 0.50,
+    FiberType.G654: 0.20,
+    FiberType.G655: 0.10,
+    FiberType.G656: 0.10,
+    FiberType.G657: 0.10,
+}
+
+REF_WAVELENGTH_NM: float = 1550.0
+
+_CD_LIMIT: Dict[float, float] = {
+    2.5: 18000.0,
+    10.0: 800.0,
+    40.0: 60.0,
+    100.0: 50000.0,
+    400.0: 20000.0,
+}
+
+
+@dataclass
+class FiberDispersionResult:
+    fiber_id: str
+    length_km: float
+    dispersion_coeff_ps_nm_km: float
+    accumulated_cd_ps_nm: float
+    pmd_ps: float
+
+
+@dataclass
+class DispersionResult:
+    channel_id: str
+    wavelength_nm: float
+    bitrate_gbps: float
+
+    total_cd_ps_nm: float = 0.0
+    total_pmd_ps: float = 0.0
+    cd_limit_ps_nm: float = 0.0
+    pmd_limit_ps: float = 0.0
+
+    cd_is_valid: bool = False
+    pmd_is_valid: bool = False
+    fiber_results: List[FiberDispersionResult] = field(default_factory=list)
+
+    @property
+    def is_valid(self) -> bool:
+        return self.cd_is_valid and self.pmd_is_valid
+
+
+class DispersionCalculator:
+    @staticmethod
+    def cd_coefficient(fiber_type: FiberType, wavelength_nm: float) -> float:
+        d_ref = _CD_COEFF.get(fiber_type, 17.0)
+        slope = _CD_SLOPE.get(fiber_type, 0.067)
+        return d_ref + slope * (wavelength_nm - REF_WAVELENGTH_NM)
+
+    @staticmethod
+    def pmd_coefficient(fiber_type: FiberType) -> float:
+        return _PMD_COEFF.get(fiber_type, 0.10)
+
+    @staticmethod
+    def cd_limit(bitrate_gbps: float) -> float:
+        keys = sorted(_CD_LIMIT.keys())
+        for key in keys:
+            if bitrate_gbps <= key * 1.01:
+                return _CD_LIMIT[key]
+        return _CD_LIMIT[keys[-1]]
+
+    @staticmethod
+    def pmd_limit(bitrate_gbps: float) -> float:
+        return 100.0 / bitrate_gbps if bitrate_gbps > 0 else float("inf")
+
+    def fiber_dispersion(self, fiber: Fiber, wavelength_nm: float) -> FiberDispersionResult:
+        d = self.cd_coefficient(fiber.fiber_type, wavelength_nm)
+        acc_cd = d * fiber.length_km
+        pmd = self.pmd_coefficient(fiber.fiber_type) * math.sqrt(max(fiber.length_km, 0.0))
+        return FiberDispersionResult(
+            fiber_id=fiber.fiber_id,
+            length_km=fiber.length_km,
+            dispersion_coeff_ps_nm_km=d,
+            accumulated_cd_ps_nm=acc_cd,
+            pmd_ps=pmd,
+        )
+
+    def channel_dispersion(self, network: Network, channel: Channel) -> DispersionResult:
+        res = DispersionResult(
+            channel_id=channel.channel_id,
+            wavelength_nm=channel.wavelength_nm,
+            bitrate_gbps=channel.bitrate_gbps,
+            cd_limit_ps_nm=self.cd_limit(channel.bitrate_gbps),
+            pmd_limit_ps=self.pmd_limit(channel.bitrate_gbps),
+        )
+
+        if not channel.path or len(channel.path) < 2:
+            return res
+
+        total_cd = 0.0
+        pmd_sq = 0.0
+        for fiber in network.get_path_fibers(channel.path):
+            fr = self.fiber_dispersion(fiber, channel.wavelength_nm)
+            res.fiber_results.append(fr)
+            total_cd += fr.accumulated_cd_ps_nm
+            pmd_sq += fr.pmd_ps ** 2
+
+        res.total_cd_ps_nm = total_cd
+        res.total_pmd_ps = math.sqrt(pmd_sq)
+        res.cd_is_valid = abs(total_cd) <= res.cd_limit_ps_nm
+        res.pmd_is_valid = res.total_pmd_ps <= res.pmd_limit_ps
+        return res
+
+    def all_channels(self, network: Network) -> Dict[str, DispersionResult]:
+        return {ch_id: self.channel_dispersion(network, ch) for ch_id, ch in network.channels.items()}
+
+
+def calculate_channel_dispersion(network: Network, channel: Channel) -> Tuple[float, float, float]:
     """
-    Оценка спектральной ширины источника (нм) по скорости передачи.
-
-    Приближённая зависимость для систем с внешней модуляцией:
-    10G ~ 0.1 нм, 100G (когерентные) ~ 0.01 нм.
-
-    Args:
-        bitrate_gbps: Скорость в Гбит/с
-
-    Returns:
-        Оценка Δλ в нм
-    """
-    if bitrate_gbps <= 0:
-        return 0.1
-    if bitrate_gbps >= 100:
-        return 0.01
-    if bitrate_gbps >= 40:
-        return 0.02
-    return max(0.01, 0.5 / (bitrate_gbps ** 0.5))
-
-
-def calculate_path_dispersion_coefficient_weighted(
-    fibers: List[Fiber],
-) -> float:
-    """
-    Взвешенное среднее D(λ) по участкам (пс/(нм·км)).
-    """
-    if not fibers:
-        return 0.0
-    total_km = sum(max(0.0, f.length_km) for f in fibers)
-    if total_km <= 0:
-        return 0.0
-    weighted = sum(
-        f.length_km * f.get_dispersion_coefficient_ps_per_nm_km()
-        for f in fibers
-    )
-    return weighted / total_km
-
-
-def calculate_path_dispersion_parameter_ps_per_nm(fibers: List[Fiber]) -> float:
-    """
-    Суммарный дисперсионный параметр D·L (пс/нм) для пути.
-    """
-    return sum(
-        f.calculate_dispersion_parameter_ps_per_nm()
-        for f in fibers
-    )
-
-
-def calculate_path_chromatic_dispersion_ps(
-    fibers: List[Fiber],
-    spectral_width_nm: Optional[float] = None,
-    bitrate_gbps: Optional[float] = None,
-) -> float:
-    """
-    Уширение импульса (пс) за счёт хроматической дисперсии на всём пути.
-
-    Args:
-        fibers: Список волокон на пути
-        spectral_width_nm: Спектральная ширина (нм). Если None — из bitrate
-        bitrate_gbps: Скорость (Гбит/с) для оценки Δλ при spectral_width_nm=None
-
-    Returns:
-        τ_chr в пс
-    """
-    if spectral_width_nm is None:
-        spectral_width_nm = estimate_spectral_width_nm(bitrate_gbps or 10.0)
-    return sum(
-        f.calculate_chromatic_dispersion_ps(spectral_width_nm=spectral_width_nm)
-        for f in fibers
-    )
-
-
-def calculate_channel_dispersion(
-    network: Network,
-    channel: Channel,
-) -> Tuple[float, float, float]:
-    """
-    Расчёт дисперсии для канала.
-
-    Args:
-        network: Модель сети
-        channel: Канал
-
-    Returns:
-        (D_eff пс/(нм·км), D·L пс/нм, τ_chr пс)
+    Обратная совместимость: вернуть (D_eff, D·L, τ_chr), где τ_chr = D·L.
     """
     fibers = network.get_path_fibers(channel.path or [])
-    if not fibers:
-        return 0.0, 0.0, 0.0
-
-    delta_lambda = estimate_spectral_width_nm(channel.bitrate_gbps)
-    d_eff = calculate_path_dispersion_coefficient_weighted(fibers)
-    d_l = calculate_path_dispersion_parameter_ps_per_nm(fibers)
-    tau_chr = calculate_path_chromatic_dispersion_ps(
-        fibers, spectral_width_nm=delta_lambda
-    )
+    line_length_km = sum(max(float(fiber.length_km), 0.0) for fiber in fibers)
+    calc = DispersionCalculator()
+    result = calc.channel_dispersion(network, channel)
+    d_eff = result.total_cd_ps_nm / line_length_km if line_length_km > 0 else 0.0
+    d_l = result.total_cd_ps_nm
+    tau_chr = d_l
     return d_eff, d_l, tau_chr

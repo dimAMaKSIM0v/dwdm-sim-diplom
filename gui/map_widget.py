@@ -40,7 +40,7 @@ from core.managers.topology_analyzer import TopologyAnalyzer
 from core.managers.topology_manager import TopologyManager
 from core.managers.traffic_manager import TrafficManager
 from core.calculators.amplifier_placer import AmplifierPlacer
-from core.calculators.dispersion import calculate_channel_dispersion
+from core.calculators.dispersion import DispersionCalculator, DispersionResult
 from core.calculators.frequency_plan import FrequencyPlan
 from core.calculators.power_budget import PowerBudgetResult
 from core.managers.simulation_manager import SimulationManager
@@ -314,6 +314,7 @@ class MapWidget(QWidget):
         self.simulation_manager = SimulationManager(self.network)
 
         self.power_budget_results: Dict[str, PowerBudgetResult] = {}
+        self.dispersion_results: Dict[str, DispersionResult] = {}
         self.selected_channel_id: Optional[str] = None
         self.selected_channel_edges: Set[Tuple[str, str]] = set()
         self._syncing_channel_selection = False
@@ -762,6 +763,11 @@ class MapWidget(QWidget):
         calc_buttons.addWidget(self.place_amplifiers_btn)
         calc_buttons.addWidget(self.run_budget_btn)
         calc_form.addRow(calc_buttons)
+        disp_buttons = QHBoxLayout()
+        self.run_dispersion_btn = QPushButton("Рассчитать дисперсию")
+        self.run_dispersion_btn.clicked.connect(self.run_dispersion_calc)
+        disp_buttons.addWidget(self.run_dispersion_btn)
+        calc_form.addRow(disp_buttons)
         calc_group.setLayout(calc_form)
         layout.addWidget(calc_group)
 
@@ -814,7 +820,7 @@ class MapWidget(QWidget):
         layout = QVBoxLayout()
 
         self.excel_line_calc_table = QTableWidget()
-        self.excel_line_calc_table.setColumnCount(28)
+        self.excel_line_calc_table.setColumnCount(33)
         self.excel_line_calc_table.setHorizontalHeaderLabels(
             [
                 "№ п/п",
@@ -844,7 +850,12 @@ class MapWidget(QWidget):
                 "Длина волны λ, нм",
                 "Скорость, Гбит/с",
                 "D, пс/(нм·км)",
-                "τ хр, пс",
+                "ΣХД, пс/нм",
+                "Лим. ХД, пс/нм",
+                "ХД",
+                "ПМД, пс",
+                "Лим. ПМД, пс",
+                "ПМД",
             ]
         )
         self.excel_line_calc_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
@@ -1131,6 +1142,7 @@ class MapWidget(QWidget):
         self.network.channels = loaded_network.channels
         self.network.equipment = loaded_network.equipment
         self.power_budget_results.clear()
+        self.dispersion_results.clear()
         self.selected_channel_id = None
         self.selected_channel_edges.clear()
         self._clear_flow_state()
@@ -1400,6 +1412,7 @@ class MapWidget(QWidget):
         for channel_id in to_remove:
             self.network.channels.pop(channel_id, None)
             self.power_budget_results.pop(channel_id, None)
+            self.dispersion_results.pop(channel_id, None)
             if self.selected_channel_id == channel_id:
                 self.selected_channel_id = None
                 self.selected_channel_edges.clear()
@@ -1590,6 +1603,7 @@ class MapWidget(QWidget):
 
         self.network.channels.pop(channel_id, None)
         self.power_budget_results.pop(channel_id, None)
+        self.dispersion_results.pop(channel_id, None)
         if self.selected_channel_id == channel_id:
             self.selected_channel_id = None
             self.selected_channel_edges.clear()
@@ -1609,6 +1623,7 @@ class MapWidget(QWidget):
             return
         self.network.channels.clear()
         self.power_budget_results.clear()
+        self.dispersion_results.clear()
         self.selected_channel_id = None
         self.selected_channel_edges.clear()
         self.refresh_dwdm_tables()
@@ -1700,6 +1715,49 @@ class MapWidget(QWidget):
         if warnings:
             message += "\n\nПредупреждения:\n" + "\n".join(warnings[:10])
         QMessageBox.information(self, "Бюджет мощности", message)
+
+    def run_dispersion_calc(self):
+        if not self.network.channels:
+            QMessageBox.warning(self, "Нет каналов", "Сначала создайте каналы.")
+            return
+
+        calc = DispersionCalculator()
+        self.dispersion_results = calc.all_channels(self.network)
+
+        total = len(self.dispersion_results)
+        cd_ok = sum(1 for r in self.dispersion_results.values() if r.cd_is_valid)
+        pmd_ok = sum(1 for r in self.dispersion_results.values() if r.pmd_is_valid)
+
+        self.refresh_dwdm_tables()
+
+        lines = [
+            f"Каналов проверено: {total}",
+            "",
+            "Хроматическая дисперсия (ХД):",
+            f"  OK:   {cd_ok}",
+            f"  FAIL: {total - cd_ok}",
+            "",
+            "Поляризационная модовая дисперсия (ПМД):",
+            f"  OK:   {pmd_ok}",
+            f"  FAIL: {total - pmd_ok}",
+        ]
+
+        fail_details = []
+        for r in self.dispersion_results.values():
+            if not r.is_valid:
+                cd_flag = "" if r.cd_is_valid else f"ХД={r.total_cd_ps_nm:.0f}>{r.cd_limit_ps_nm:.0f}"
+                pmd_flag = "" if r.pmd_is_valid else f"ПМД={r.total_pmd_ps:.2f}>{r.pmd_limit_ps:.2f}"
+                detail = f"  {r.channel_id}: " + ", ".join(filter(None, [cd_flag, pmd_flag]))
+                fail_details.append(detail)
+
+        if fail_details:
+            lines.append("")
+            lines.append("Проблемные каналы:")
+            lines.extend(fail_details[:15])
+            if len(fail_details) > 15:
+                lines.append(f"  ... и ещё {len(fail_details) - 15}")
+
+        QMessageBox.information(self, "Результат расчёта дисперсии", "\n".join(lines))
 
     def _apply_channel_selection(self, channel_id: Optional[str]):
         if not channel_id or channel_id not in self.network.channels:
@@ -2027,14 +2085,14 @@ class MapWidget(QWidget):
             prefix_values = [str(row_number), channel.channel_id, source_id, target_id, path_text]
 
             if not fibers:
-                values = prefix_values + ["-"] * 23
+                values = prefix_values + ["-"] * 28
                 for col_idx, value in enumerate(values):
                     self.excel_line_calc_table.setItem(row_idx, col_idx, QTableWidgetItem(value))
                 continue
 
             line_length_km = sum(max(float(fiber.length_km), 0.0) for fiber in fibers)
             if line_length_km <= 0.0:
-                values = prefix_values + ["-"] * 23
+                values = prefix_values + ["-"] * 28
                 for col_idx, value in enumerate(values):
                     self.excel_line_calc_table.setItem(row_idx, col_idx, QTableWidgetItem(value))
                 continue
@@ -2098,7 +2156,20 @@ class MapWidget(QWidget):
             fiber_types = sorted({str(fiber.fiber_type.value).replace(".", " ") for fiber in fibers})
             fiber_type_text = fiber_types[0] if len(fiber_types) == 1 else "/".join(fiber_types)
 
-            d_eff, d_l, tau_chr = calculate_channel_dispersion(self.network, channel)
+            disp = self.dispersion_results.get(channel.channel_id)
+            if disp is not None:
+                d_avg = disp.total_cd_ps_nm / line_length_km if line_length_km > 0 else 0.0
+                disp_values = [
+                    self._fmt_calc_value(d_avg, 2),
+                    self._fmt_calc_value(disp.total_cd_ps_nm, 1),
+                    self._fmt_calc_value(disp.cd_limit_ps_nm, 0),
+                    "OK" if disp.cd_is_valid else "FAIL",
+                    self._fmt_calc_value(disp.total_pmd_ps, 2),
+                    self._fmt_calc_value(disp.pmd_limit_ps, 2),
+                    "OK" if disp.pmd_is_valid else "FAIL",
+                ]
+            else:
+                disp_values = ["-"] * 7
 
             values = prefix_values + [
                 self._fmt_calc_value(energy_budget_db, 1),
@@ -2122,16 +2193,24 @@ class MapWidget(QWidget):
                 fiber_type_text,
                 self._fmt_calc_value(float(channel.wavelength_nm), 3),
                 self._fmt_calc_value(float(channel.bitrate_gbps), 1),
-                self._fmt_calc_value(d_eff, 2),
-                self._fmt_calc_value(tau_chr, 1),
-            ]
+            ] + disp_values
 
             compare_col_idx = 18
+            cd_status_col = 29
+            pmd_status_col = 32
             for col_idx, value in enumerate(values):
                 item = QTableWidgetItem(value)
                 if col_idx == compare_col_idx and compare_state == "no":
                     item.setForeground(Qt.red)
                 if col_idx == compare_col_idx and compare_state == "ok":
+                    item.setForeground(Qt.darkGreen)
+                if col_idx == cd_status_col and value == "FAIL":
+                    item.setForeground(Qt.red)
+                if col_idx == cd_status_col and value == "OK":
+                    item.setForeground(Qt.darkGreen)
+                if col_idx == pmd_status_col and value == "FAIL":
+                    item.setForeground(Qt.red)
+                if col_idx == pmd_status_col and value == "OK":
                     item.setForeground(Qt.darkGreen)
                 self.excel_line_calc_table.setItem(row_idx, col_idx, item)
 
