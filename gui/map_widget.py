@@ -1,4 +1,4 @@
-﻿"""Виджет карты для работы с топологией и потоковой структурой сети."""
+"""Виджет карты для работы с топологией и потоковой структурой сети."""
 from __future__ import annotations
 
 import json
@@ -40,6 +40,7 @@ from core.managers.topology_analyzer import TopologyAnalyzer
 from core.managers.topology_manager import TopologyManager
 from core.managers.traffic_manager import TrafficManager
 from core.calculators.amplifier_placer import AmplifierPlacer
+from core.calculators.dispersion import calculate_channel_dispersion
 from core.calculators.frequency_plan import FrequencyPlan
 from core.calculators.power_budget import PowerBudgetResult
 from core.managers.simulation_manager import SimulationManager
@@ -813,7 +814,7 @@ class MapWidget(QWidget):
         layout = QVBoxLayout()
 
         self.excel_line_calc_table = QTableWidget()
-        self.excel_line_calc_table.setColumnCount(26)
+        self.excel_line_calc_table.setColumnCount(28)
         self.excel_line_calc_table.setHorizontalHeaderLabels(
             [
                 "№ п/п",
@@ -842,6 +843,8 @@ class MapWidget(QWidget):
                 "Тип ОВ",
                 "Длина волны λ, нм",
                 "Скорость, Гбит/с",
+                "D, пс/(нм·км)",
+                "τ хр, пс",
             ]
         )
         self.excel_line_calc_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
@@ -2024,14 +2027,14 @@ class MapWidget(QWidget):
             prefix_values = [str(row_number), channel.channel_id, source_id, target_id, path_text]
 
             if not fibers:
-                values = prefix_values + ["-"] * 21
+                values = prefix_values + ["-"] * 23
                 for col_idx, value in enumerate(values):
                     self.excel_line_calc_table.setItem(row_idx, col_idx, QTableWidgetItem(value))
                 continue
 
             line_length_km = sum(max(float(fiber.length_km), 0.0) for fiber in fibers)
             if line_length_km <= 0.0:
-                values = prefix_values + ["-"] * 21
+                values = prefix_values + ["-"] * 23
                 for col_idx, value in enumerate(values):
                     self.excel_line_calc_table.setItem(row_idx, col_idx, QTableWidgetItem(value))
                 continue
@@ -2095,6 +2098,8 @@ class MapWidget(QWidget):
             fiber_types = sorted({str(fiber.fiber_type.value).replace(".", " ") for fiber in fibers})
             fiber_type_text = fiber_types[0] if len(fiber_types) == 1 else "/".join(fiber_types)
 
+            d_eff, d_l, tau_chr = calculate_channel_dispersion(self.network, channel)
+
             values = prefix_values + [
                 self._fmt_calc_value(energy_budget_db, 1),
                 self._fmt_calc_value(line_length_km, 1),
@@ -2117,6 +2122,8 @@ class MapWidget(QWidget):
                 fiber_type_text,
                 self._fmt_calc_value(float(channel.wavelength_nm), 3),
                 self._fmt_calc_value(float(channel.bitrate_gbps), 1),
+                self._fmt_calc_value(d_eff, 2),
+                self._fmt_calc_value(tau_chr, 1),
             ]
 
             compare_col_idx = 18

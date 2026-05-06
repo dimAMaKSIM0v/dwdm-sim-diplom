@@ -217,6 +217,10 @@ def load_network_from_json(path: str | Path) -> Network:
                 item.get("splice_count_override"),
                 "splice_count_override",
             ),
+            dispersion_ps_per_nm_km=_safe_optional_float(
+                item.get("dispersion_ps_per_nm_km"),
+                "dispersion_ps_per_nm_km",
+            ),
             route_points=_parse_route_points(item.get("route_points", [])),
             is_trunk=bool(item.get("is_trunk", False)),
         )
@@ -343,6 +347,7 @@ def save_network_to_json(network: Network, path: str | Path) -> None:
                 "connector_losses_db": fiber.connector_losses_db,
                 "line_reserve_db": fiber.line_reserve_db,
                 "splice_count_override": fiber.splice_count_override,
+                "dispersion_ps_per_nm_km": fiber.dispersion_ps_per_nm_km,
                 "route_points": [[lat, lon] for lat, lon in fiber.route_points],
                 "is_trunk": fiber.is_trunk,
             }

@@ -1,0 +1,154 @@
+{
+  "name": "DWDM Physical Variant 11 - Compact (5 nodes)",
+  "nodes": [
+    {
+      "name": "Moscow",
+      "node_type": "terminal",
+      "latitude": 55.7558,
+      "longitude": 37.6173,
+      "territory": "Moscow",
+      "organization": "JSC Backbone Optical Network, Moscow hub",
+      "node_id": "MSK"
+    },
+    {
+      "name": "Tver",
+      "node_type": "transit",
+      "latitude": 56.8587,
+      "longitude": 35.9176,
+      "territory": "Tver Oblast",
+      "organization": "JSC Backbone Optical Network, Upper Volga branch",
+      "node_id": "TVR"
+    },
+    {
+      "name": "Yaroslavl",
+      "node_type": "transit",
+      "latitude": 57.6261,
+      "longitude": 39.8845,
+      "territory": "Yaroslavl Oblast",
+      "organization": "JSC Backbone Optical Network, Upper Volga branch",
+      "node_id": "YAR"
+    },
+    {
+      "name": "Ivanovo",
+      "node_type": "transit",
+      "latitude": 56.9984,
+      "longitude": 40.9739,
+      "territory": "Ivanovo Oblast",
+      "organization": "JSC Backbone Optical Network, Upper Volga branch",
+      "node_id": "IVN"
+    },
+    {
+      "name": "Vladimir",
+      "node_type": "transit",
+      "latitude": 56.1291,
+      "longitude": 40.4066,
+      "territory": "Vladimir Oblast",
+      "organization": "JSC Backbone Optical Network, Central branch",
+      "node_id": "VLA"
+    }
+  ],
+  "line_channel": {
+    "fiber_type": "G.655",
+    "attenuation_db_per_km": 0.22,
+    "splice_interval_km": 25.0,
+    "splice_losses_db": 0.02,
+    "connector_losses_db": 0.35,
+    "line_reserve_db": 8.0,
+    "trace_mode": "roads",
+    "wavelength_nm": 1550.12,
+    "bitrate_gbps": 100.0,
+    "tx_power_dbm": 0.0,
+    "rx_sensitivity_dbm": -40.0,
+    "energy_budget_db": 40.0
+  },
+  "fibers": [
+    {
+      "fiber_id": "FBR_MSK_TVR",
+      "source_node_id": "MSK",
+      "target_node_id": "TVR",
+      "length_km": 161.34,
+      "fiber_type": "G.652",
+      "attenuation_db_per_km": 0.22,
+      "splice_losses_db": 0.02,
+      "splice_interval_km": 25.0,
+      "connector_losses_db": 0.35,
+      "line_reserve_db": 8.0,
+      "route_points": [],
+      "is_trunk": false
+    },
+    {
+      "fiber_id": "FBR_TVR_YAR",
+      "source_node_id": "TVR",
+      "target_node_id": "YAR",
+      "length_km": 253.42,
+      "fiber_type": "G.652",
+      "attenuation_db_per_km": 0.22,
+      "splice_losses_db": 0.02,
+      "splice_interval_km": 25.0,
+      "connector_losses_db": 0.35,
+      "line_reserve_db": 8.0,
+      "route_points": [],
+      "is_trunk": false
+    },
+    {
+      "fiber_id": "FBR_YAR_IVN",
+      "source_node_id": "YAR",
+      "target_node_id": "IVN",
+      "length_km": 95.66,
+      "fiber_type": "G.652",
+      "attenuation_db_per_km": 0.22,
+      "splice_losses_db": 0.02,
+      "splice_interval_km": 25.0,
+      "connector_losses_db": 0.35,
+      "line_reserve_db": 8.0,
+      "route_points": [],
+      "is_trunk": false
+    },
+    {
+      "fiber_id": "FBR_IVN_VLA",
+      "source_node_id": "IVN",
+      "target_node_id": "VLA",
+      "length_km": 102.72,
+      "fiber_type": "G.652",
+      "attenuation_db_per_km": 0.22,
+      "splice_losses_db": 0.02,
+      "splice_interval_km": 25.0,
+      "connector_losses_db": 0.35,
+      "line_reserve_db": 8.0,
+      "route_points": [],
+      "is_trunk": false
+    }
+  ],
+  "channels": [
+    {
+      "channel_id": "CH_MSK_VLA_100G",
+      "wavelength_nm": 1550.12,
+      "tx_power_dbm": 0.0,
+      "rx_sensitivity_dbm": -40.0,
+      "bitrate_gbps": 100.0,
+      "energy_budget_db": 40.0,
+      "path": [
+        "MSK",
+        "TVR",
+        "YAR",
+        "IVN",
+        "VLA"
+      ]
+    },
+    {
+      "channel_id": "CH_TVR_VLA_40G",
+      "wavelength_nm": 1530.0,
+      "tx_power_dbm": 0.0,
+      "rx_sensitivity_dbm": -38.0,
+      "bitrate_gbps": 40.0,
+      "energy_budget_db": 38.0,
+      "path": [
+        "TVR",
+        "YAR",
+        "IVN",
+        "VLA"
+      ]
+    }
+  ],
+  "equipment": []
+}

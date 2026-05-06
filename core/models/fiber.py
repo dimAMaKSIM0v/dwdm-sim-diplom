@@ -49,6 +49,7 @@ class Fiber:
     connector_losses_db: float = 0.3  # Потери на одном коннекторе
     line_reserve_db: float = 0.0
     splice_count_override: Optional[int] = None
+    dispersion_ps_per_nm_km: Optional[float] = None  # D(λ), пс/(нм·км), если задано — переопределяет тип
     route_points: List[Tuple[float, float]] = field(default_factory=list)
     is_trunk: bool = False
     
@@ -61,12 +62,60 @@ class Fiber:
         FiberType.G656: 0.22,
         FiberType.G657: 0.22,
     }
+
+    # Коэффициент хроматической дисперсии D(λ) в пс/(нм·км) на 1550 нм
+    # [ITU-T G.652, G.653, G.654, G.655, G.656, G.657; Fibotelecom.ru; Студопедия]
+    DISPERSION_COEFF_MAP = {
+        FiberType.G652: 17.0,   # λ₀≈1310 нм, в C-диапазоне ~17 пс/(нм·км)
+        FiberType.G653: 0.0,    # Волокно со смещённой дисперсией, λ₀≈1550 нм
+        FiberType.G654: 20.0,   # Аналогично G.652
+        FiberType.G655: 4.5,    # Ненулевая дисперсионная смещённая, 2–6 пс/(нм·км)
+        FiberType.G656: 7.0,    # Широкополосное NZ-DSF, 2–14 пс/(нм·км)
+        FiberType.G657: 17.0,   # Изгибоустойчивое, характеристики как G.652
+    }
     
     def get_attenuation_per_km(self) -> float:
         """Возвращает затухание в дБ/км для данного типа волокна"""
         if self.attenuation_db_per_km is not None:
             return self.attenuation_db_per_km
         return self.ATTENUATION_MAP.get(self.fiber_type, 0.22)
+
+    def get_dispersion_coefficient_ps_per_nm_km(self) -> float:
+        """
+        Возвращает коэффициент хроматической дисперсии D(λ) в пс/(нм·км)
+        на длине волны ~1550 нм (C-диапазон).
+        """
+        if self.dispersion_ps_per_nm_km is not None:
+            return self.dispersion_ps_per_nm_km
+        return self.DISPERSION_COEFF_MAP.get(self.fiber_type, 17.0)
+
+    def calculate_chromatic_dispersion_ps(
+        self, spectral_width_nm: float = 0.1, wavelength_nm: Optional[float] = None
+    ) -> float:
+        """
+        Рассчитывает уширение импульса за счёт хроматической дисперсии (пс).
+
+        τ_chr = |D(λ)| · Δλ · L
+
+        где D(λ) — коэффициент хроматической дисперсии (пс/(нм·км)),
+        Δλ — спектральная ширина источника (нм), L — длина (км).
+
+        Args:
+            spectral_width_nm: спектральная ширина источника, нм (по умолчанию 0.1 для 10G)
+            wavelength_nm: длина волны для расчёта (не используется при D из справочника)
+
+        Returns:
+            Уширение импульса в пс
+        """
+        d = self.get_dispersion_coefficient_ps_per_nm_km()
+        return abs(d) * max(0.0, spectral_width_nm) * max(0.0, self.length_km)
+
+    def calculate_dispersion_parameter_ps_per_nm(self) -> float:
+        """
+        Рассчитывает дисперсионный параметр участка D·L (пс/нм).
+        Используется для оценки необходимости компенсации дисперсии.
+        """
+        return self.get_dispersion_coefficient_ps_per_nm_km() * max(0.0, self.length_km)
     
     def calculate_fiber_loss(self) -> float:
         """
