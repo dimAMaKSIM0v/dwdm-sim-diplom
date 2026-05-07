@@ -25,30 +25,64 @@ wheels/
 venv/
 ENV/
 env/
+env.bak/
+venv.bak/
 
-# IDE
+# IDE & Editors
 .vscode/
 .idea/
+.vscode/settings.json
+.vscode/launch.json
 *.swp
 *.swo
 *~
+*.sublime-project
+*.sublime-workspace
 
-# Logs
+# Logs & Debugging
 *.log
 logs/
+*.pot
 
-# OS
+# Testing & Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.hypothesis/
+
+# Distribution
+MANIFEST
+
+# OS & System Files
 .DS_Store
 Thumbs.db
+.Directory
+*.app
+.AppleDouble
+.LSOverride
+
+# Jupyter Notebooks
+.ipynb_checkpoints
+*.ipynb
+
+# IDE specific
+.mypy_cache/
+.dmypy.json
+dmypy.json
 
 # Project specific
 *.pyc
 *.pyo
+.cache/
 .pytest_cache/
-.coverage
-htmlcov/
+results/
 
-# Data files (опционально, если нужно сохранять примеры)
-# *.json
-# *.yaml
+# Qt generated files
+ui_*.py
+resources_rc.py
 
+# Data exports (optional - uncomment if needed)
+*.xlsx
+*.csv
+exports/
