@@ -12,6 +12,7 @@ from PyQt5.QtCore import QObject, Qt, pyqtSignal, pyqtSlot
 from PyQt5.QtWebChannel import QWebChannel
 from PyQt5.QtWebEngineWidgets import QWebEngineView
 from PyQt5.QtWidgets import (
+    QAbstractItemView,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -40,6 +41,7 @@ from core.managers.topology_analyzer import TopologyAnalyzer
 from core.managers.topology_manager import TopologyManager
 from core.managers.traffic_manager import TrafficManager
 from core.calculators.amplifier_placer import AmplifierPlacer
+from core.calculators.attenuation import calculate_channel_attenuation
 from core.calculators.dispersion import DispersionCalculator, DispersionResult
 from core.calculators.frequency_plan import FrequencyPlan
 from core.calculators.power_budget import PowerBudgetResult
@@ -239,7 +241,7 @@ class FiberConnectionDialog(QDialog):
         self.fiber_type_combo.addItems([ft.value for ft in FiberType])
         self.coil_length_spin = QDoubleSpinBox()
         self.coil_length_spin.setRange(0.01, 100000.0)
-        self.coil_length_spin.setDecimals(2)
+        self.coil_length_spin.setDecimals(2)    
         self.coil_length_spin.setValue(25.0)
         self.splice_loss_spin = QDoubleSpinBox()
         self.splice_loss_spin.setRange(0.0, 10.0)
@@ -304,6 +306,8 @@ class MapBridge(QObject):
 
 class MapWidget(QWidget):
     """Основной виджет карты и управления сетью."""
+
+    BITRATE_OPTIONS_GBPS: Tuple[float, ...] = (2.5, 10.0, 40.0, 100.0, 400.0)
 
     def __init__(self, network: Network, parent=None):
         super().__init__(parent)
@@ -383,6 +387,39 @@ class MapWidget(QWidget):
         self.setLayout(main_layout)
         self.refresh_all()
 
+    @classmethod
+    def _configure_bitrate_combo(cls, combo: QComboBox, default_value: float = 100.0):
+        combo.clear()
+        for bitrate in cls.BITRATE_OPTIONS_GBPS:
+            combo.addItem(str(int(bitrate)) if float(bitrate).is_integer() else str(bitrate), float(bitrate))
+        cls._set_bitrate_widget_value(combo, default_value)
+
+    @staticmethod
+    def _set_bitrate_widget_value(widget, value: float):
+        bitrate = float(value)
+        if isinstance(widget, QDoubleSpinBox):
+            widget.setValue(bitrate)
+            return
+        if isinstance(widget, QComboBox):
+            for idx in range(widget.count()):
+                item_value = widget.itemData(idx)
+                if item_value is not None and math.isclose(float(item_value), bitrate, rel_tol=0.0, abs_tol=1e-6):
+                    widget.setCurrentIndex(idx)
+                    return
+            widget.setCurrentText(str(int(bitrate)) if bitrate.is_integer() else str(bitrate))
+
+    @staticmethod
+    def _get_bitrate_widget_value(widget) -> float:
+        if isinstance(widget, QDoubleSpinBox):
+            return float(widget.value())
+        if isinstance(widget, QComboBox):
+            data = widget.currentData()
+            if data is not None:
+                return float(data)
+            text = widget.currentText().strip().replace(",", ".")
+            return float(text) if text else 0.0
+        return 0.0
+
     # ---------- UI builders ----------
 
     def _build_workspace_tabs(self) -> QWidget:
@@ -390,6 +427,7 @@ class MapWidget(QWidget):
         self.workspace_tabs.addTab(self._build_management_tab(), "Топология")
         self.workspace_tabs.addTab(self._build_automation_tab(), "Трассировка")
         self.workspace_tabs.addTab(self._build_dwdm_tab(), "Каналы")
+        self.workspace_tabs.addTab(self._build_graphs_tab(), "Графики")
         self.workspace_tabs.addTab(self._build_excel_line_calc_tab(), "Таблица")
         self.workspace_tabs.addTab(self._build_project_files_tab(), "Файлы")
         return self.workspace_tabs
@@ -513,6 +551,7 @@ class MapWidget(QWidget):
             ["ID", "Название", "Тип", "Территория", "Орг.", "Широта", "Долгота"]
         )
         self.nodes_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.nodes_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.nodes_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.nodes_table.itemSelectionChanged.connect(self.on_node_selection_changed)
         layout.addWidget(self.nodes_table)
@@ -586,6 +625,7 @@ class MapWidget(QWidget):
             ]
         )
         self.fibers_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        self.fibers_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.fibers_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.fibers_table.itemSelectionChanged.connect(self.on_fiber_selection_changed)
         layout.addWidget(self.fibers_table)
@@ -598,6 +638,7 @@ class MapWidget(QWidget):
             ["Волокно", "Тип", "Позиция, км", "Потери, дБ", "Комментарий"]
         )
         self.fiber_events_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        self.fiber_events_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.fiber_events_table.setSelectionBehavior(QTableWidget.SelectRows)
         events_layout.addWidget(self.fiber_events_table)
         events_group.setLayout(events_layout)
@@ -668,6 +709,7 @@ class MapWidget(QWidget):
             ["ID", "От", "До", "Емкость (Гбит/с)", "Маршруты", "Статус"]
         )
         self.directions_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.directions_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         dirs_layout.addWidget(self.directions_table)
         dirs_group.setLayout(dirs_layout)
         layout.addWidget(dirs_group, stretch=1)
@@ -680,6 +722,7 @@ class MapWidget(QWidget):
             ["Линия", "Нагрузка (Гбит/с)", "Число ИН", "Отн. нагрузка", "Критичность"]
         )
         self.flow_loads_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.flow_loads_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         fiber_loads_layout.addWidget(self.flow_loads_table)
         fiber_loads_group.setLayout(fiber_loads_layout)
         layout.addWidget(fiber_loads_group, stretch=1)
@@ -692,6 +735,7 @@ class MapWidget(QWidget):
             ["Узел", "Транзит ИН", "Отн. нагрузка", "Критичность"]
         )
         self.node_loads_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.node_loads_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         node_loads_layout.addWidget(self.node_loads_table)
         node_loads_group.setLayout(node_loads_layout)
         layout.addWidget(node_loads_group, stretch=1)
@@ -710,11 +754,10 @@ class MapWidget(QWidget):
         self.channel_wavelength_spin = QDoubleSpinBox()
         self.channel_wavelength_spin.setRange(1200.0, 1700.0)
         self.channel_wavelength_spin.setDecimals(3)
+        self.channel_wavelength_spin.setSingleStep(0.001)
         self.channel_wavelength_spin.setValue(1550.120)
-        self.channel_bitrate_spin = QDoubleSpinBox()
-        self.channel_bitrate_spin.setRange(1.0, 800.0)
-        self.channel_bitrate_spin.setDecimals(1)
-        self.channel_bitrate_spin.setValue(100.0)
+        self.channel_bitrate_spin = QComboBox()
+        self._configure_bitrate_combo(self.channel_bitrate_spin, 100.0)
         self.channel_tx_power_spin = QDoubleSpinBox()
         self.channel_tx_power_spin.setRange(-20.0, 20.0)
         self.channel_tx_power_spin.setDecimals(1)
@@ -790,9 +833,17 @@ class MapWidget(QWidget):
             ]
         )
         self.channels_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.channels_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.channels_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.channels_table.itemSelectionChanged.connect(self.on_channel_selection_changed)
-        layout.addWidget(self.channels_table, stretch=2)
+        layout.addWidget(self.channels_table, stretch=1)
+
+        widget.setLayout(layout)
+        return widget
+
+    def _build_graphs_tab(self) -> QWidget:
+        widget = QWidget()
+        layout = QVBoxLayout()
 
         profile_group = QGroupBox("Профиль мощности выбранного канала")
         profile_layout = QVBoxLayout()
@@ -800,6 +851,7 @@ class MapWidget(QWidget):
         self.profile_table.setColumnCount(2)
         self.profile_table.setHorizontalHeaderLabels(["Расстояние, км", "Мощность, дБм"])
         self.profile_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.profile_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         profile_layout.addWidget(self.profile_table)
         if FigureCanvas is not None and Figure is not None:
             self.profile_figure = Figure(figsize=(4, 2))
@@ -811,6 +863,26 @@ class MapWidget(QWidget):
             profile_layout.addWidget(QLabel("Matplotlib недоступен."))
         profile_group.setLayout(profile_layout)
         layout.addWidget(profile_group, stretch=2)
+
+        dispersion_group = QGroupBox("Профиль дисперсии выбранного канала")
+        dispersion_layout = QVBoxLayout()
+        self.dispersion_profile_label = QLabel("Выберите канал для отображения профиля дисперсии.")
+        dispersion_layout.addWidget(self.dispersion_profile_label)
+        if FigureCanvas is not None and Figure is not None:
+            self.dispersion_figure = Figure(figsize=(4, 2))
+            self.dispersion_canvas = FigureCanvas(self.dispersion_figure)
+            dispersion_layout.addWidget(self.dispersion_canvas)
+            self.dispersion_pulse_figure = Figure(figsize=(4, 1.8))
+            self.dispersion_pulse_canvas = FigureCanvas(self.dispersion_pulse_figure)
+            dispersion_layout.addWidget(self.dispersion_pulse_canvas)
+        else:
+            self.dispersion_figure = None
+            self.dispersion_canvas = None
+            self.dispersion_pulse_figure = None
+            self.dispersion_pulse_canvas = None
+            dispersion_layout.addWidget(QLabel("Matplotlib недоступен."))
+        dispersion_group.setLayout(dispersion_layout)
+        layout.addWidget(dispersion_group, stretch=2)
 
         widget.setLayout(layout)
         return widget
@@ -859,6 +931,7 @@ class MapWidget(QWidget):
             ]
         )
         self.excel_line_calc_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        self.excel_line_calc_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.excel_line_calc_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.excel_line_calc_table.itemSelectionChanged.connect(self.on_excel_channel_selection_changed)
         layout.addWidget(self.excel_line_calc_table, stretch=1)
@@ -923,11 +996,10 @@ class MapWidget(QWidget):
         self.quick_wavelength_spin = QDoubleSpinBox()
         self.quick_wavelength_spin.setRange(1200.0, 1700.0)
         self.quick_wavelength_spin.setDecimals(3)
+        self.quick_wavelength_spin.setSingleStep(0.001)
         self.quick_wavelength_spin.setValue(1550.120)
-        self.quick_bitrate_spin = QDoubleSpinBox()
-        self.quick_bitrate_spin.setRange(0.1, 800.0)
-        self.quick_bitrate_spin.setDecimals(1)
-        self.quick_bitrate_spin.setValue(100.0)
+        self.quick_bitrate_spin = QComboBox()
+        self._configure_bitrate_combo(self.quick_bitrate_spin, 100.0)
         self.quick_energy_budget_spin = QDoubleSpinBox()
         self.quick_energy_budget_spin.setRange(0.0, 200.0)
         self.quick_energy_budget_spin.setDecimals(1)
@@ -1255,6 +1327,8 @@ class MapWidget(QWidget):
                 spin = getattr(self, spin_name)
                 if isinstance(spin, QDoubleSpinBox):
                     spin.setValue(float(value))
+                elif isinstance(spin, QComboBox) and key == "bitrate_gbps":
+                    self._set_bitrate_widget_value(spin, float(value))
             except (TypeError, ValueError):
                 return
 
@@ -1351,7 +1425,7 @@ class MapWidget(QWidget):
                     "attenuation_db_per_km": float(self.quick_alpha_spin.value()),
                     "trace_mode": str(self.quick_trace_mode_combo.currentData() or "roads"),
                     "wavelength_nm": float(self.quick_wavelength_spin.value()),
-                    "bitrate_gbps": float(self.quick_bitrate_spin.value()),
+                    "bitrate_gbps": self._get_bitrate_widget_value(self.quick_bitrate_spin),
                     "energy_budget_db": float(self.quick_energy_budget_spin.value()),
                 }
             )
@@ -1380,7 +1454,7 @@ class MapWidget(QWidget):
         if hasattr(self, "channel_wavelength_spin"):
             settings["wavelength_nm"] = float(self.channel_wavelength_spin.value())
         if hasattr(self, "channel_bitrate_spin"):
-            settings["bitrate_gbps"] = float(self.channel_bitrate_spin.value())
+            settings["bitrate_gbps"] = self._get_bitrate_widget_value(self.channel_bitrate_spin)
         if hasattr(self, "channel_tx_power_spin"):
             settings["tx_power_dbm"] = float(self.channel_tx_power_spin.value())
         if hasattr(self, "channel_rx_sens_spin"):
@@ -1556,7 +1630,7 @@ class MapWidget(QWidget):
             wavelength_nm=wavelength,
             tx_power_dbm=tx_power_dbm,
             rx_sensitivity_dbm=rx_sensitivity_dbm,
-            bitrate_gbps=float(self.channel_bitrate_spin.value()),
+            bitrate_gbps=self._get_bitrate_widget_value(self.channel_bitrate_spin),
             energy_budget_db=energy_budget_db,
             path=path,
         )
@@ -1765,6 +1839,7 @@ class MapWidget(QWidget):
             self.selected_channel_edges.clear()
             self.profile_table.setRowCount(0)
             self._plot_profile([])
+            self._plot_dispersion_profile(None)
             self.update_map()
             return
 
@@ -1783,6 +1858,7 @@ class MapWidget(QWidget):
             self.profile_table.setItem(row_idx, 0, QTableWidgetItem(f"{distance_km:.2f}"))
             self.profile_table.setItem(row_idx, 1, QTableWidgetItem(f"{power_dbm:.2f}"))
         self._plot_profile(profile)
+        self._plot_dispersion_profile(channel)
         self.update_map()
 
     @staticmethod
@@ -1856,6 +1932,182 @@ class MapWidget(QWidget):
         self.profile_figure.tight_layout()
         self.profile_canvas.draw()
 
+    def _plot_dispersion_profile(self, channel: Optional[Channel]):
+        if not hasattr(self, "dispersion_profile_label"):
+            return
+        if channel is None:
+            self.dispersion_profile_label.setText("Выберите канал для отображения профиля дисперсии.")
+            if self.dispersion_figure is not None and self.dispersion_canvas is not None:
+                self.dispersion_figure.clear()
+                axis = self.dispersion_figure.add_subplot(111)
+                axis.text(0.5, 0.5, "Нет профиля", ha="center", va="center", transform=axis.transAxes)
+                axis.set_axis_off()
+                self.dispersion_figure.tight_layout()
+                self.dispersion_canvas.draw()
+            self._plot_pulse_broadening(None, None)
+            return
+
+        result = self.dispersion_results.get(channel.channel_id)
+        if result is None:
+            self.dispersion_profile_label.setText(
+                "Сначала нажмите 'Рассчитать дисперсию' на вкладке 'Каналы'."
+            )
+            if self.dispersion_figure is not None and self.dispersion_canvas is not None:
+                self.dispersion_figure.clear()
+                axis = self.dispersion_figure.add_subplot(111)
+                axis.text(0.5, 0.5, "Нет профиля", ha="center", va="center", transform=axis.transAxes)
+                axis.set_axis_off()
+                self.dispersion_figure.tight_layout()
+                self.dispersion_canvas.draw()
+            self._plot_pulse_broadening(None, None)
+            return
+
+        if not result.fiber_results:
+            self.dispersion_profile_label.setText("Нет данных по трассе канала для расчета дисперсии.")
+            if self.dispersion_figure is not None and self.dispersion_canvas is not None:
+                self.dispersion_figure.clear()
+                axis = self.dispersion_figure.add_subplot(111)
+                axis.text(0.5, 0.5, "Нет профиля", ha="center", va="center", transform=axis.transAxes)
+                axis.set_axis_off()
+                self.dispersion_figure.tight_layout()
+                self.dispersion_canvas.draw()
+            self._plot_pulse_broadening(None, None)
+            return
+
+        distances = [0.0]
+        cd_values = [0.0]
+        pmd_values = [0.0]
+        cumulative_length = 0.0
+        cumulative_cd = 0.0
+        cumulative_pmd_sq = 0.0
+        for fiber_res in result.fiber_results:
+            cumulative_length += max(float(fiber_res.length_km), 0.0)
+            cumulative_cd += float(fiber_res.accumulated_cd_ps_nm)
+            cumulative_pmd_sq += float(fiber_res.pmd_ps) ** 2
+            distances.append(cumulative_length)
+            cd_values.append(cumulative_cd)
+            pmd_values.append(math.sqrt(cumulative_pmd_sq))
+
+        self.dispersion_profile_label.setText(
+            (
+                f"ХД: {result.total_cd_ps_nm:.1f}/{result.cd_limit_ps_nm:.0f} пс/нм "
+                f"({'OK' if result.cd_is_valid else 'FAIL'}) | "
+                f"ПМД: {result.total_pmd_ps:.2f}/{result.pmd_limit_ps:.2f} пс "
+                f"({'OK' if result.pmd_is_valid else 'FAIL'})"
+            )
+        )
+
+        if self.dispersion_figure is None or self.dispersion_canvas is None:
+            return
+        self.dispersion_figure.clear()
+        axis = self.dispersion_figure.add_subplot(111)
+        axis.plot(distances, cd_values, marker="o", linewidth=1.5, markersize=3, label="ΣХД, пс/нм")
+        axis.plot(distances, pmd_values, marker="s", linewidth=1.5, markersize=3, label="ПМД, пс")
+        axis.set_xlabel("Расстояние, км")
+        axis.set_ylabel("Накопленное значение")
+        axis.grid(True, linestyle="--", alpha=0.4)
+        axis.legend(loc="best", fontsize=8)
+        self.dispersion_figure.tight_layout()
+        self.dispersion_canvas.draw()
+        self._plot_pulse_broadening(result, channel)
+
+    @staticmethod
+    def _estimate_spectral_width_nm(bitrate_gbps: float) -> float:
+        """
+        Приближённая оценка спектральной ширины источника Δλ (нм) по скорости.
+        Нужна для расчёта уширения импульса: τ_CD = |ΣХД| · Δλ.
+        """
+        if bitrate_gbps <= 0:
+            return 0.1
+        if bitrate_gbps >= 100:
+            return 0.01
+        if bitrate_gbps >= 40:
+            return 0.02
+        return max(0.01, 0.5 / (bitrate_gbps ** 0.5))
+
+    def _plot_pulse_broadening(self, result: Optional[DispersionResult], channel: Optional[Channel]):
+        if self.dispersion_pulse_figure is None or self.dispersion_pulse_canvas is None:
+            return
+
+        self.dispersion_pulse_figure.clear()
+        axis = self.dispersion_pulse_figure.add_subplot(111)
+
+        if result is None or channel is None:
+            axis.text(0.5, 0.5, "Нет данных", ha="center", va="center", transform=axis.transAxes)
+            axis.set_axis_off()
+            self.dispersion_pulse_figure.tight_layout()
+            self.dispersion_pulse_canvas.draw()
+            return
+
+        # --- 1) Параметры импульса и уширение по формулам ---
+        bitrate = float(result.bitrate_gbps)
+        t_bit_ps = 1000.0 / bitrate if bitrate > 0 else 100.0
+        # Берём RMS-ширину входного импульса как долю битового интервала (простая модель).
+        sigma_in_ps = 0.35 * t_bit_ps
+
+        delta_lambda_nm = self._estimate_spectral_width_nm(bitrate)
+        tau_cd_ps = abs(float(result.total_cd_ps_nm)) * float(delta_lambda_nm)  # ps
+        tau_pmd_ps = float(result.total_pmd_ps)  # ps
+
+        sigma_out_ps = math.sqrt(sigma_in_ps ** 2 + tau_cd_ps ** 2 + tau_pmd_ps ** 2)
+        broadening_factor = max(sigma_out_ps / max(sigma_in_ps, 1e-9), 1e-9)
+
+        # --- 2) Потери/усиление по мощности (влияние на амплитуду) ---
+        budget = self.power_budget_results.get(channel.channel_id)
+        if budget is not None:
+            net_loss_db = float(getattr(budget, "net_loss_db", budget.raw_loss_db))
+        else:
+            net_loss_db = float(calculate_channel_attenuation(self.network, channel))
+        power_ratio = 10 ** (-net_loss_db / 10.0)
+
+        # Пик по мощности падает из-за (a) потерь, (b) уширения при сохранении энергии.
+        peak_ratio = power_ratio / broadening_factor
+
+        # --- 3) Задержка распространения (выводим числом) ---
+        total_length_km = sum(max(float(fr.length_km), 0.0) for fr in result.fiber_results)
+        c_m_s = 299_792_458.0
+        n_g = 1.468  # типовое групповое значение показателя преломления для SMF в 1550 нм
+        tau_g_s = (total_length_km * 1000.0) * n_g / c_m_s
+
+        # --- 4) Строим график в пс, по одной оси ---
+        t_half_window_ps = max(6.0 * sigma_out_ps, 6.0 * sigma_in_ps, 10.0)
+        step_ps = max(t_half_window_ps / 250.0, 0.5)
+        x_ps = [(-t_half_window_ps + step_ps * i) for i in range(int((2 * t_half_window_ps) / step_ps) + 1)]
+
+        y_in = [math.exp(-0.5 * (t / sigma_in_ps) ** 2) for t in x_ps]
+        y_out = [peak_ratio * math.exp(-0.5 * (t / sigma_out_ps) ** 2) for t in x_ps]
+
+        axis.fill_between(x_ps, y_in, color="#64B5F6", alpha=0.25)
+        axis.plot(x_ps, y_in, color="#1E88E5", linewidth=1.8, label="Входной (норм.)")
+        axis.fill_between(x_ps, y_out, color="#FFB74D", alpha=0.25)
+        axis.plot(x_ps, y_out, color="#E53935", linewidth=1.8, label="Выходной (с потерями)")
+        axis.set_title("Импульс: уширение (ХД+ПМД) и ослабление", fontsize=9)
+        axis.set_xlabel("Время, пс (в окрестности приёма)")
+        axis.set_ylabel("Норм. мощность")
+        # Логарифмическая шкала по OX с поддержкой отрицательных значений.
+        # Вблизи нуля оставляем линейный участок (linthresh), дальше — логарифм.
+        axis.set_xscale("symlog", linthresh=max(5.0, 2.0 * sigma_in_ps))
+        axis.grid(True, linestyle="--", alpha=0.35)
+        axis.legend(loc="best", fontsize=8)
+        axis.text(
+            0.01,
+            0.98,
+            (
+                f"Δλ≈{delta_lambda_nm:.3f} нм,  τ_CD≈{tau_cd_ps:.1f} пс,  τ_PMD≈{tau_pmd_ps:.2f} пс\n"
+                f"Tbit≈{t_bit_ps:.1f} пс,  σ_in≈{sigma_in_ps:.1f} пс,  σ_out≈{sigma_out_ps:.1f} пс,  "
+                f"peak≈{peak_ratio:.3g}\n"
+                f"Задержка распространения τ_g≈{tau_g_s*1e3:.3f} мс (по n_g={n_g})"
+            ),
+            transform=axis.transAxes,
+            ha="left",
+            va="top",
+            fontsize=8,
+            color="#333",
+        )
+
+        self.dispersion_pulse_figure.tight_layout()
+        self.dispersion_pulse_canvas.draw()
+
     def refresh_dwdm_tables(self):
         self._refresh_channel_selectors()
 
@@ -1916,11 +2168,20 @@ class MapWidget(QWidget):
                     break
             if hasattr(self, "excel_line_calc_table"):
                 self._select_channel_row(self.excel_line_calc_table, self.selected_channel_id, 1)
+            self._apply_channel_selection(self.selected_channel_id)
+        elif channels:
+            first_channel_id = channels[0].channel_id
+            self.selected_channel_id = first_channel_id
+            self._select_channel_row(self.channels_table, first_channel_id, 0)
+            if hasattr(self, "excel_line_calc_table"):
+                self._select_channel_row(self.excel_line_calc_table, first_channel_id, 1)
+            self._apply_channel_selection(first_channel_id)
         else:
             self.selected_channel_id = None
             self.selected_channel_edges.clear()
             self.profile_table.setRowCount(0)
             self._plot_profile([])
+            self._plot_dispersion_profile(None)
 
     @staticmethod
     def _fmt_calc_value(value: float, decimals: int) -> str:
@@ -2477,7 +2738,7 @@ class MapWidget(QWidget):
 
         channel_id = self._quick_pair_channel_id(source.node_id, target.node_id)
         wavelength_nm = float(self.quick_wavelength_spin.value())
-        bitrate_gbps = float(self.quick_bitrate_spin.value())
+        bitrate_gbps = self._get_bitrate_widget_value(self.quick_bitrate_spin)
         energy_budget_db = float(self.quick_energy_budget_spin.value())
         tx_power_dbm = 0.0
         rx_sensitivity_dbm = -energy_budget_db
@@ -3519,4 +3780,3 @@ class MapWidget(QWidget):
 </html>
 """
         self.web_view.setHtml(html)
-
