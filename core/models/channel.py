@@ -2,8 +2,25 @@
 Модель оптического канала (Channel)
 Представляет один канал (лямбду) в системе DWDM
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, List
+
+from enum import Enum
+
+
+class LaserType(str, Enum):
+    """Тип лазера (параметр источника)."""
+
+    DFB = "dfb"
+    EML = "eml"
+    FP = "fp"
+
+
+class ModulationType(str, Enum):
+    """Тип модуляции (упрощённо)."""
+
+    NRZ = "nrz"
+    RZ = "rz"
 
 
 @dataclass
@@ -22,6 +39,8 @@ class Channel:
         path: Путь канала (список ID узлов)
         osnr_db: Отношение сигнал/шум в дБ (вычисляется)
         current_power_dbm: Текущая мощность сигнала в дБм (вычисляется)
+        laser_type: Тип лазера для расчёта дисперсии
+        modulation_type: Тип модуляции для расчёта дисперсии
     """
     channel_id: str
     wavelength_nm: float
@@ -33,6 +52,8 @@ class Channel:
     path: List[str] = None  # Путь: список node_id
     osnr_db: Optional[float] = None
     current_power_dbm: Optional[float] = None
+    laser_type: LaserType = LaserType.DFB
+    modulation_type: ModulationType = ModulationType.NRZ
     
     def __post_init__(self):
         if self.path is None:

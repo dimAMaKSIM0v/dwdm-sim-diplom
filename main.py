@@ -4,7 +4,9 @@
 Точка входа в приложение для моделирования DWDM сетей
 """
 import argparse
+import os
 import sys
+import tempfile
 from PyQt5.QtWidgets import QApplication
 from core.models.network import Network
 from gui.main_window import MainWindow
@@ -26,6 +28,16 @@ def parse_args(argv: list[str]):
 def main():
     """Главная функция запуска приложения."""
     args = parse_args(sys.argv)
+
+    # QtWebEngine (Chromium) иногда падает, если нет прав на GPUCache в профиле.
+    # Принудительно отключаем GPU и направляем кеш/профиль в доступную временную папку.
+    os.environ.setdefault("QTWEBENGINE_DISABLE_GPU", "1")
+    os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--disable-gpu --disable-gpu-compositing")
+    webengine_profile_root = os.path.join(tempfile.gettempdir(), "dwdm_webengine")
+    os.makedirs(webengine_profile_root, exist_ok=True)
+    os.environ.setdefault("QTWEBENGINEPROFILE_DATA_PATH", webengine_profile_root)
+    os.environ.setdefault("QTWEBENGINEPROFILE_CACHE_PATH", webengine_profile_root)
+
     app = QApplication(sys.argv)
     app.setApplicationName("DWDM Network Simulator")
 

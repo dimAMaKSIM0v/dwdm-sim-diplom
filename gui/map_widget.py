@@ -43,6 +43,7 @@ from core.managers.traffic_manager import TrafficManager
 from core.calculators.amplifier_placer import AmplifierPlacer
 from core.calculators.attenuation import calculate_channel_attenuation
 from core.calculators.dispersion import DispersionCalculator, DispersionResult
+from core.calculators.dispersion_visualizer import DispersionVisualizer
 from core.calculators.frequency_plan import FrequencyPlan
 from core.calculators.power_budget import PowerBudgetResult
 from core.managers.simulation_manager import SimulationManager
@@ -316,6 +317,7 @@ class MapWidget(QWidget):
         self.topology_analyzer = TopologyAnalyzer(self.network)
         self.traffic_manager = TrafficManager(self.network)
         self.simulation_manager = SimulationManager(self.network)
+        self.dispersion_visualizer = DispersionVisualizer()
 
         self.power_budget_results: Dict[str, PowerBudgetResult] = {}
         self.dispersion_results: Dict[str, DispersionResult] = {}
@@ -868,6 +870,30 @@ class MapWidget(QWidget):
         dispersion_layout = QVBoxLayout()
         self.dispersion_profile_label = QLabel("Выберите канал для отображения профиля дисперсии.")
         dispersion_layout.addWidget(self.dispersion_profile_label)
+        disp_controls = QHBoxLayout()
+        self.disp_modulation_combo = QComboBox()
+        self.disp_modulation_combo.addItem("NRZ", "nrz")
+        self.disp_modulation_combo.addItem("RZ", "rz")
+        self.disp_laser_combo = QComboBox()
+        self.disp_laser_combo.addItem("DFB (узкий)", "dfb")
+        self.disp_laser_combo.addItem("EML (средний)", "eml")
+        self.disp_laser_combo.addItem("FP (широкий)", "fp")
+        self.disp_laser_width_override = QDoubleSpinBox()
+        self.disp_laser_width_override.setRange(0.0, 10.0)
+        self.disp_laser_width_override.setDecimals(6)
+        self.disp_laser_width_override.setSingleStep(0.0001)
+        self.disp_laser_width_override.setValue(0.0)
+        self.disp_laser_width_override.setToolTip("Δλ, нм. 0 = взять типовое по выбранному типу лазера.")
+        disp_controls.addWidget(QLabel("Модуляция:"))
+        disp_controls.addWidget(self.disp_modulation_combo)
+        disp_controls.addSpacing(8)
+        disp_controls.addWidget(QLabel("Лазер:"))
+        disp_controls.addWidget(self.disp_laser_combo)
+        disp_controls.addSpacing(8)
+        disp_controls.addWidget(QLabel("Δλ, нм (0=авто):"))
+        disp_controls.addWidget(self.disp_laser_width_override)
+        disp_controls.addStretch()
+        dispersion_layout.addLayout(disp_controls)
         if FigureCanvas is not None and Figure is not None:
             self.dispersion_figure = Figure(figsize=(4, 2))
             self.dispersion_canvas = FigureCanvas(self.dispersion_figure)
@@ -2011,20 +2037,6 @@ class MapWidget(QWidget):
         self.dispersion_canvas.draw()
         self._plot_pulse_broadening(result, channel)
 
-    @staticmethod
-    def _estimate_spectral_width_nm(bitrate_gbps: float) -> float:
-        """
-        Приближённая оценка спектральной ширины источника Δλ (нм) по скорости.
-        Нужна для расчёта уширения импульса: τ_CD = |ΣХД| · Δλ.
-        """
-        if bitrate_gbps <= 0:
-            return 0.1
-        if bitrate_gbps >= 100:
-            return 0.01
-        if bitrate_gbps >= 40:
-            return 0.02
-        return max(0.01, 0.5 / (bitrate_gbps ** 0.5))
-
     def _plot_pulse_broadening(self, result: Optional[DispersionResult], channel: Optional[Channel]):
         if self.dispersion_pulse_figure is None or self.dispersion_pulse_canvas is None:
             return
@@ -2039,43 +2051,35 @@ class MapWidget(QWidget):
             self.dispersion_pulse_canvas.draw()
             return
 
-        # --- 1) Параметры импульса и уширение по формулам ---
-        bitrate = float(result.bitrate_gbps)
-        t_bit_ps = 1000.0 / bitrate if bitrate > 0 else 100.0
-        # Берём RMS-ширину входного импульса как долю битового интервала (простая модель).
-        sigma_in_ps = 0.35 * t_bit_ps
+        modulation = "nrz"
+        if hasattr(self, "disp_modulation_combo"):
+            modulation = str(self.disp_modulation_combo.currentData() or "nrz")
+        laser_type = "dfb"
+        if hasattr(self, "disp_laser_combo"):
+            laser_type = str(self.disp_laser_combo.currentData() or "dfb")
+        laser_width_override = None
+        if hasattr(self, "disp_laser_width_override"):
+            raw = float(self.disp_laser_width_override.value())
+            laser_width_override = raw if raw > 0 else None
 
-        delta_lambda_nm = self._estimate_spectral_width_nm(bitrate)
-        tau_cd_ps = abs(float(result.total_cd_ps_nm)) * float(delta_lambda_nm)  # ps
-        tau_pmd_ps = float(result.total_pmd_ps)  # ps
-
-        sigma_out_ps = math.sqrt(sigma_in_ps ** 2 + tau_cd_ps ** 2 + tau_pmd_ps ** 2)
-        broadening_factor = max(sigma_out_ps / max(sigma_in_ps, 1e-9), 1e-9)
-
-        # --- 2) Потери/усиление по мощности (влияние на амплитуду) ---
         budget = self.power_budget_results.get(channel.channel_id)
-        if budget is not None:
-            net_loss_db = float(getattr(budget, "net_loss_db", budget.raw_loss_db))
-        else:
-            net_loss_db = float(calculate_channel_attenuation(self.network, channel))
-        power_ratio = 10 ** (-net_loss_db / 10.0)
-
-        # Пик по мощности падает из-за (a) потерь, (b) уширения при сохранении энергии.
-        peak_ratio = power_ratio / broadening_factor
-
-        # --- 3) Задержка распространения (выводим числом) ---
-        total_length_km = sum(max(float(fr.length_km), 0.0) for fr in result.fiber_results)
-        c_m_s = 299_792_458.0
-        n_g = 1.468  # типовое групповое значение показателя преломления для SMF в 1550 нм
-        tau_g_s = (total_length_km * 1000.0) * n_g / c_m_s
+        metrics = self.dispersion_visualizer.pulse_metrics(
+            self.network,
+            channel,
+            result,
+            modulation=modulation,  # type: ignore[arg-type]
+            laser_type=laser_type,  # type: ignore[arg-type]
+            laser_width_nm_override=laser_width_override,
+            budget=budget,
+        )
 
         # --- 4) Строим график в пс, по одной оси ---
-        t_half_window_ps = max(6.0 * sigma_out_ps, 6.0 * sigma_in_ps, 10.0)
+        t_half_window_ps = max(6.0 * metrics.sigma_out_ps, 6.0 * metrics.sigma_in_ps, 10.0)
         step_ps = max(t_half_window_ps / 250.0, 0.5)
         x_ps = [(-t_half_window_ps + step_ps * i) for i in range(int((2 * t_half_window_ps) / step_ps) + 1)]
 
-        y_in = [math.exp(-0.5 * (t / sigma_in_ps) ** 2) for t in x_ps]
-        y_out = [peak_ratio * math.exp(-0.5 * (t / sigma_out_ps) ** 2) for t in x_ps]
+        y_in = [math.exp(-0.5 * (t / metrics.sigma_in_ps) ** 2) for t in x_ps]
+        y_out = [metrics.peak_ratio * math.exp(-0.5 * (t / metrics.sigma_out_ps) ** 2) for t in x_ps]
 
         axis.fill_between(x_ps, y_in, color="#64B5F6", alpha=0.25)
         axis.plot(x_ps, y_in, color="#1E88E5", linewidth=1.8, label="Входной (норм.)")
@@ -2086,17 +2090,18 @@ class MapWidget(QWidget):
         axis.set_ylabel("Норм. мощность")
         # Логарифмическая шкала по OX с поддержкой отрицательных значений.
         # Вблизи нуля оставляем линейный участок (linthresh), дальше — логарифм.
-        axis.set_xscale("symlog", linthresh=max(5.0, 2.0 * sigma_in_ps))
+        axis.set_xscale("symlog", linthresh=max(5.0, 2.0 * metrics.sigma_in_ps))
         axis.grid(True, linestyle="--", alpha=0.35)
         axis.legend(loc="best", fontsize=8)
         axis.text(
             0.01,
             0.98,
             (
-                f"Δλ≈{delta_lambda_nm:.3f} нм,  τ_CD≈{tau_cd_ps:.1f} пс,  τ_PMD≈{tau_pmd_ps:.2f} пс\n"
-                f"Tbit≈{t_bit_ps:.1f} пс,  σ_in≈{sigma_in_ps:.1f} пс,  σ_out≈{sigma_out_ps:.1f} пс,  "
-                f"peak≈{peak_ratio:.3g}\n"
-                f"Задержка распространения τ_g≈{tau_g_s*1e3:.3f} мс (по n_g={n_g})"
+                f"Лазер={laser_type.upper()}, модуляция={modulation.upper()},  Δλ≈{metrics.delta_lambda_nm:.6f} нм\n"
+                f"τ_CD≈{metrics.tau_cd_ps:.1f} пс,  τ_PMD≈{metrics.tau_pmd_ps:.2f} пс\n"
+                f"Tbit≈{metrics.t_bit_ps:.1f} пс,  σ_in≈{metrics.sigma_in_ps:.2f} пс,  σ_out≈{metrics.sigma_out_ps:.2f} пс\n"
+                f"loss_net≈{metrics.net_loss_db:.2f} дБ, peak≈{metrics.peak_ratio:.3g}\n"
+                f"τ_g≈{metrics.group_delay_s*1e3:.3f} мс"
             ),
             transform=axis.transAxes,
             ha="left",

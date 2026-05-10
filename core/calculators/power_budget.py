@@ -1,5 +1,34 @@
 """
-Расчет оптического бюджета мощности
+Расчет оптического бюджета мощности (Power Budget).
+
+Оптический бюджет определяет, достаточно ли мощности передатчика для
+надежного приема сигнала с учетом всех потерь в линии.
+
+Основные компоненты:
+    1. TX power - мощность передатчика [дБм]
+    2. RX sensitivity - чувствительность приемника [дБм]
+    3. Total loss - суммарные потери в линии [дБ]
+    4. Power margin - запас по мощности [дБ]
+
+Формулы:
+    Energy_budget = TX_power - RX_sensitivity [дБ]
+    Power_margin = RX_power - RX_sensitivity [дБ]
+    RX_power = TX_power - Total_loss + Total_gain [дБм]
+
+Критерии валидности:
+    - Power_margin ≥ 3 дБ (минимальный запас)
+    - Power_margin ≥ 5 дБ (рекомендуемый запас)
+    - RX_power ≤ RX_overload (защита от перегрузки)
+
+Типовые значения:
+    TX power: 0 дБм (1 мВт) для 10G, +2 дБм для 40G/100G
+    RX sensitivity: -20 дБм для 10G NRZ, -10 дБм для 100G когерентный
+    Energy budget: 20-40 дБ (зависит от класса оборудования)
+
+Источники:
+    - ITU-T G.957: Optical interfaces for equipments and systems
+    - ITU-T G.691: Optical interfaces for single channel STM-64
+    - ITU-T G.692: Optical interfaces for multichannel systems with optical amplifiers
 """
 from typing import Dict, Optional, List
 from core.models.network import Network
@@ -8,8 +37,26 @@ from core.calculators.attenuation import calculate_channel_attenuation, calculat
 
 
 class PowerBudgetResult:
-    """Результат расчета оптического бюджета"""
-    
+    """
+    Результат расчета оптического бюджета мощности.
+
+    Атрибуты:
+        channel: Канал, для которого выполнен расчет
+        raw_loss_db: Суммарные потери без учета усилителей [дБ]
+        net_loss_db: Фактические потери с учетом усиления [дБ]
+        total_loss_db: Полные потери (для совместимости = raw_loss_db) [дБ]
+        rx_power_dbm: Мощность на входе приемника [дБм]
+        power_margin_db: Запас по мощности [дБ]
+        is_valid: Флаг валидности (margin ≥ 3 дБ)
+        profile: Профиль мощности вдоль линии [(distance_km, power_dbm)]
+
+    Интерпретация результатов:
+        power_margin_db > 5 дБ: Отличный запас, линия надежна
+        power_margin_db = 3-5 дБ: Приемлемый запас, линия работоспособна
+        power_margin_db = 0-3 дБ: Недостаточный запас, риск ошибок
+        power_margin_db < 0 дБ: Линия не работает, требуются усилители
+    """
+
     def __init__(self, channel: Channel):
         self.channel = channel
         # Полные потери по линии БЕЗ учета усилителей (волокно + соединения)
@@ -22,7 +69,7 @@ class PowerBudgetResult:
         self.power_margin_db: float = 0.0
         self.is_valid: bool = False
         self.profile: List[tuple] = []
-    
+
     def __str__(self) -> str:
         status = "✓" if self.is_valid else "✗"
         return (f"{status} Channel {self.channel.channel_id}: "
