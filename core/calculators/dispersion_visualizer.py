@@ -160,10 +160,34 @@ class DispersionVisualizer:
         tau_pmd_ps = self.pmd_pulse_broadening_ps(dispersion.total_pmd_ps)
         sigma_out_ps = self.combine_sigma_ps(sigma_in_ps, tau_cd_ps, tau_pmd_ps)
 
+        # DEBUG: дисперсия
+        print(f"DEBUG dispersion:")
+        print(f"  total_cd_ps_nm = {dispersion.total_cd_ps_nm:.2f} пс/нм")
+        print(f"  delta_lambda_nm = {delta_lambda_nm:.6f} нм")
+        print(f"  tau_cd_ps = {dispersion.total_cd_ps_nm:.2f} * {delta_lambda_nm:.6f} = {tau_cd_ps:.2f} пс")
+        print(f"  sigma_in = {sigma_in_ps:.2f} пс, sigma_out = {sigma_out_ps:.2f} пс")
+
         broadening_factor = sigma_out_ps / sigma_in_ps if sigma_in_ps > 0 else 1.0
         loss_db = self.net_loss_db(network, channel, budget)
-        power_ratio = 10 ** (-loss_db / 10.0)
-        peak_ratio = (power_ratio / broadening_factor) if broadening_factor > 0 else 0.0
+
+        # Амплитуда сигнала после потерь и уширения
+        # Для гауссовых импульсов: E = A · σ · √(2π)
+        # Если энергия уменьшается (потери) и σ увеличивается (дисперсия),
+        # то амплитуда: A_out = A_in · √(E_out/E_in) · (σ_in/σ_out)
+        amplitude_ratio = 10 ** (-loss_db / 20.0)  # √(power_ratio)
+        power_ratio = amplitude_ratio ** 2
+
+        # Пиковая амплитуда с учетом уширения (для гауссовой модели)
+        # Примечание: для идеальных прямоугольных NRZ импульсов уширение
+        # влияет только на фронты, но мы используем гауссову аппроксимацию
+        peak_ratio = (amplitude_ratio / broadening_factor) if broadening_factor > 0 else 0.0
+
+        # DEBUG: выводим все значения
+        print(f"DEBUG pulse_metrics:")
+        print(f"  loss_db = {loss_db:.2f} дБ")
+        print(f"  amplitude_ratio = 10^(-{loss_db:.2f}/20) = {amplitude_ratio:.6f}")
+        print(f"  broadening_factor = {broadening_factor:.6f}")
+        print(f"  peak_ratio = {amplitude_ratio:.6f} / {broadening_factor:.6f} = {peak_ratio:.6f}")
 
         total_length_km = sum(max(float(fr.length_km), 0.0) for fr in dispersion.fiber_results)
         group_delay_s = self.group_delay_s(network, channel, dispersion)

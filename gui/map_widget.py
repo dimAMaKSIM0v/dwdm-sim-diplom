@@ -73,6 +73,166 @@ class MapClickContext:
     handler: Optional[Callable[[float, float, Optional[str]], None]] = None
 
 
+class EyeDiagramDialog(QDialog):
+    """Диалоговое окно для отображения глазковой диаграммы в большом размере."""
+
+    def __init__(self, parent, metrics, channel_id: str, modulation: str, laser_type: str):
+        super().__init__(parent)
+        self.metrics = metrics
+        self.channel_id = channel_id
+        self.modulation = modulation
+        self.laser_type = laser_type
+
+        self.setWindowTitle(f"Глазковая диаграмма — Канал {channel_id}")
+        self.resize(1200, 800)
+
+        layout = QVBoxLayout()
+
+        # Заголовок с параметрами
+        info_label = QLabel(
+            f"<b>Канал:</b> {channel_id} | "
+            f"<b>Модуляция:</b> {modulation.upper()} | "
+            f"<b>Лазер:</b> {laser_type.upper()} | "
+            f"<b>Δλ:</b> {metrics.delta_lambda_nm:.6f} нм | "
+            f"<b>Битрейт:</b> {metrics.bitrate_gbps:.1f} Гбит/с"
+        )
+        info_label.setStyleSheet("font-size: 12pt; padding: 10px; background-color: #f0f0f0; border-radius: 5px;")
+        layout.addWidget(info_label)
+
+        # График
+        if FigureCanvas is not None and Figure is not None:
+            self.figure = Figure(figsize=(12, 8))
+            self.canvas = FigureCanvas(self.figure)
+            layout.addWidget(self.canvas)
+
+            # Рисуем Eye Diagram
+            self._plot_eye_diagram()
+        else:
+            layout.addWidget(QLabel("Matplotlib недоступен."))
+
+        # Кнопки
+        button_box = QDialogButtonBox(QDialogButtonBox.Close)
+        button_box.rejected.connect(self.reject)
+        layout.addWidget(button_box)
+
+        self.setLayout(layout)
+
+    def _plot_eye_diagram(self):
+        """Рисует глазковую диаграмму."""
+        import numpy as np
+        from scipy.special import erf
+
+        axis = self.figure.add_subplot(111)
+
+        # Параметры
+        t_bit = self.metrics.t_bit_ps
+        sigma_in = self.metrics.sigma_in_ps
+        sigma_out = self.metrics.sigma_out_ps
+        peak_in = 1.0
+        peak_out = self.metrics.peak_ratio
+
+        # Эффективные sigma для видимости
+        rise_time_in = 2.2 * sigma_in
+        rise_time_out = 2.2 * sigma_out
+
+        # Временная ось: расширяем до ±2.5*t_bit для полного покрытия
+        n_samples = 5000
+        t_axis = np.linspace(-2.5 * t_bit, 2.5 * t_bit, n_samples)
+
+        # Генерируем все 5-битовые последовательности для центрального бита
+        # [a, b, CENTER, d, e] - центральный бит в позиции [0, t_bit]
+        traces_high_in = []
+        traces_low_in = []
+        traces_high_out = []
+        traces_low_out = []
+
+        for a in [0, 1]:
+            for b in [0, 1]:
+                for c in [0, 1]:  # центральный бит
+                    for d in [0, 1]:
+                        for e in [0, 1]:
+                            y_in = np.zeros_like(t_axis)
+                            y_out = np.zeros_like(t_axis)
+
+                            # 5 битов: позиции [-2, -1, 0, 1, 2] * t_bit
+                            bit_sequence = [a, b, c, d, e]
+                            for bit_idx, bit_val in enumerate(bit_sequence):
+                                t_start = (bit_idx - 2) * t_bit
+                                t_end = (bit_idx - 1) * t_bit
+
+                                if bit_val == 1:
+                                    # Входной сигнал
+                                    sigma_eff_in = max(sigma_in, t_bit * 0.005)
+                                    y_in += 0.5 * peak_in * (1 + erf((t_axis - t_start) / (sigma_eff_in * np.sqrt(2))))
+                                    y_in -= 0.5 * peak_in * (1 + erf((t_axis - t_end) / (sigma_eff_in * np.sqrt(2))))
+
+                                    # Выходной сигнал
+                                    sigma_eff_out = max(sigma_out, t_bit * 0.02)
+                                    y_out += 0.5 * peak_out * (1 + erf((t_axis - t_start) / (sigma_eff_out * np.sqrt(2))))
+                                    y_out -= 0.5 * peak_out * (1 + erf((t_axis - t_end) / (sigma_eff_out * np.sqrt(2))))
+
+                            # Классифицируем по центральному биту (c)
+                            if c == 1:
+                                traces_high_in.append(y_in)
+                                traces_high_out.append(y_out)
+                            else:
+                                traces_low_in.append(y_in)
+                                traces_low_out.append(y_out)
+
+        # Рисуем только выходной сигнал (без входного)
+        for y_out in traces_high_out:
+            axis.plot(t_axis, y_out, color="#E53935", linewidth=2.5, alpha=0.7)
+        for y_out in traces_low_out:
+            axis.plot(t_axis, y_out, color="#FF9800", linewidth=2.5, alpha=0.7)
+
+        # Оформление
+        axis.set_title("Eye Diagram (глазковая диаграмма): влияние дисперсии на качество сигнала",
+                      fontsize=14, fontweight="bold", pad=20)
+        axis.set_xlabel("Время в битовом интервале (пс)", fontsize=12)
+        axis.set_ylabel("Нормализованная мощность", fontsize=12)
+        axis.grid(True, linestyle="--", alpha=0.3)
+        axis.set_xlim(-t_bit * 1.5, t_bit * 1.5)
+
+        # Автоматический масштаб по Y: показываем только область "глаза"
+        # с небольшими отступами сверху и снизу
+        y_margin = peak_out * 0.15  # 15% отступ от пика
+        axis.set_ylim(-y_margin, peak_out + y_margin)
+
+        # Пороговая линия
+        threshold = 0.5 * peak_out
+        axis.axhline(threshold, color="green", linestyle="--", alpha=0.8, linewidth=2.5,
+                    label=f"Порог решения ({threshold:.2f})")
+
+        # Центр бита
+        axis.axvline(0, color="gray", linestyle=":", alpha=0.6, linewidth=1.5)
+        axis.text(0, peak_out + y_margin * 0.85, "Центр бита (оптимальная точка семплирования)",
+                 ha="center", fontsize=10, color="gray", fontweight="bold")
+
+        # Легенда
+        from matplotlib.patches import Patch
+        legend_elements = [
+            Patch(facecolor="#E53935", alpha=0.7, label="Выходной: бит=1"),
+            Patch(facecolor="#FF9800", alpha=0.7, label="Выходной: бит=0"),
+        ]
+        axis.legend(handles=legend_elements, loc="upper right", fontsize=11)
+
+        # Информационная панель
+        eye_info = (
+            f"σ_in = {sigma_in:.3f} пс (время нарастания ≈ {rise_time_in:.2f} пс)\n"
+            f"σ_out = {sigma_out:.3f} пс (время нарастания ≈ {rise_time_out:.2f} пс)\n"
+            f"Битовый интервал = {t_bit:.1f} пс\n"
+            f"τ_CD = {self.metrics.tau_cd_ps:.1f} пс, τ_PMD = {self.metrics.tau_pmd_ps:.2f} пс\n"
+            f"Потери = {self.metrics.net_loss_db:.2f} дБ, пик = {peak_out:.3f}\n"
+            f"Задержка = {self.metrics.group_delay_s*1e3:.3f} мс"
+        )
+        axis.text(0.02, 0.02, eye_info, transform=axis.transAxes,
+                 fontsize=10, verticalalignment='bottom',
+                 bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.7, pad=0.8))
+
+        self.figure.tight_layout()
+        self.canvas.draw()
+
+
 class NodeEditDialog(QDialog):
     """Диалог редактирования узла."""
 
@@ -893,6 +1053,13 @@ class MapWidget(QWidget):
         disp_controls.addWidget(QLabel("Δλ, нм (0=авто):"))
         disp_controls.addWidget(self.disp_laser_width_override)
         disp_controls.addStretch()
+
+        # Кнопка для открытия графика в отдельном окне
+        self.open_eye_diagram_btn = QPushButton("📊 Открыть глазковую диаграмму в отдельном окне")
+        self.open_eye_diagram_btn.clicked.connect(self._open_eye_diagram_window)
+        self.open_eye_diagram_btn.setStyleSheet("QPushButton { font-weight: bold; padding: 8px; }")
+        disp_controls.addWidget(self.open_eye_diagram_btn)
+
         dispersion_layout.addLayout(disp_controls)
         if FigureCanvas is not None and Figure is not None:
             self.dispersion_figure = Figure(figsize=(4, 2))
@@ -2051,17 +2218,21 @@ class MapWidget(QWidget):
             self.dispersion_pulse_canvas.draw()
             return
 
+        # --- Получить параметры модуляции и лазера из UI ---
         modulation = "nrz"
         if hasattr(self, "disp_modulation_combo"):
             modulation = str(self.disp_modulation_combo.currentData() or "nrz")
+
         laser_type = "dfb"
         if hasattr(self, "disp_laser_combo"):
             laser_type = str(self.disp_laser_combo.currentData() or "dfb")
+
         laser_width_override = None
         if hasattr(self, "disp_laser_width_override"):
             raw = float(self.disp_laser_width_override.value())
             laser_width_override = raw if raw > 0 else None
 
+        # --- Рассчитать метрики пульса используя физический визуализатор ---
         budget = self.power_budget_results.get(channel.channel_id)
         metrics = self.dispersion_visualizer.pulse_metrics(
             self.network,
@@ -2073,45 +2244,280 @@ class MapWidget(QWidget):
             budget=budget,
         )
 
-        # --- 4) Строим график в пс, по одной оси ---
-        t_half_window_ps = max(6.0 * metrics.sigma_out_ps, 6.0 * metrics.sigma_in_ps, 10.0)
-        step_ps = max(t_half_window_ps / 250.0, 0.5)
-        x_ps = [(-t_half_window_ps + step_ps * i) for i in range(int((2 * t_half_window_ps) / step_ps) + 1)]
+        # --- Выбрать тип графика ---
+        # Вариант 1: Temporal (временная диаграмма импульсов)
+        # self._plot_nrz_sequence(axis, metrics)
 
-        y_in = [math.exp(-0.5 * (t / metrics.sigma_in_ps) ** 2) for t in x_ps]
-        y_out = [metrics.peak_ratio * math.exp(-0.5 * (t / metrics.sigma_out_ps) ** 2) for t in x_ps]
+        # Вариант 2: Eye Diagram (глазковая диаграмма)
+        self._plot_eye_diagram(axis, metrics)
 
-        axis.fill_between(x_ps, y_in, color="#64B5F6", alpha=0.25)
-        axis.plot(x_ps, y_in, color="#1E88E5", linewidth=1.8, label="Входной (норм.)")
-        axis.fill_between(x_ps, y_out, color="#FFB74D", alpha=0.25)
-        axis.plot(x_ps, y_out, color="#E53935", linewidth=1.8, label="Выходной (с потерями)")
-        axis.set_title("Импульс: уширение (ХД+ПМД) и ослабление", fontsize=9)
-        axis.set_xlabel("Время, пс (в окрестности приёма)")
-        axis.set_ylabel("Норм. мощность")
-        # Логарифмическая шкала по OX с поддержкой отрицательных значений.
-        # Вблизи нуля оставляем линейный участок (linthresh), дальше — логарифм.
-        axis.set_xscale("symlog", linthresh=max(5.0, 2.0 * metrics.sigma_in_ps))
-        axis.grid(True, linestyle="--", alpha=0.35)
-        axis.legend(loc="best", fontsize=8)
+        # --- Добавить информацию ---
         axis.text(
             0.01,
             0.98,
             (
-                f"Лазер={laser_type.upper()}, модуляция={modulation.upper()},  Δλ≈{metrics.delta_lambda_nm:.6f} нм\n"
-                f"τ_CD≈{metrics.tau_cd_ps:.1f} пс,  τ_PMD≈{metrics.tau_pmd_ps:.2f} пс\n"
-                f"Tbit≈{metrics.t_bit_ps:.1f} пс,  σ_in≈{metrics.sigma_in_ps:.2f} пс,  σ_out≈{metrics.sigma_out_ps:.2f} пс\n"
-                f"loss_net≈{metrics.net_loss_db:.2f} дБ, peak≈{metrics.peak_ratio:.3g}\n"
-                f"τ_g≈{metrics.group_delay_s*1e3:.3f} мс"
+                f"Лазер={laser_type.upper()}, модуляция={modulation.upper()}, Δλ≈{metrics.delta_lambda_nm:.6f} нм\n"
+                f"τ_CD≈{metrics.tau_cd_ps:.1f} пс, τ_PMD≈{metrics.tau_pmd_ps:.2f} пс\n"
+                f"σ_in≈{metrics.sigma_in_ps:.2f} пс, σ_out≈{metrics.sigma_out_ps:.2f} пс\n"
+                f"Потери≈{metrics.net_loss_db:.2f} дБ, пик≈{metrics.peak_ratio:.3g}\n"
+                f"Задержка≈{metrics.group_delay_s*1e3:.3f} мс"
             ),
             transform=axis.transAxes,
             ha="left",
             va="top",
             fontsize=8,
             color="#333",
+            bbox=dict(boxstyle="round,pad=0.5", facecolor="yellow", alpha=0.2),
         )
 
         self.dispersion_pulse_figure.tight_layout()
         self.dispersion_pulse_canvas.draw()
+
+    def _plot_nrz_sequence(self, axis, metrics):
+        """
+        Рисует последовательность NRZ импульсов с уширением от дисперсии.
+
+        Показывает:
+        - Входной импульс (прямоугольный NRZ с резкими фронтами)
+        - Выходной импульс (с размытыми фронтами от дисперсии)
+        - Несколько повторений для видимости ISI (межсимвольной интерференции)
+        """
+        import numpy as np
+        from scipy.special import erf
+
+        # Параметры
+        t_bit = metrics.t_bit_ps
+        sigma_in = metrics.sigma_in_ps
+        sigma_out = metrics.sigma_out_ps
+        peak_in = 1.0
+        peak_out = metrics.peak_ratio
+
+        # Показываем 6 битов для наглядности
+        n_bits = 6
+        bit_sequence = [1, 0, 1, 1, 0, 1]
+
+        # Временная ось
+        n_samples = 2000
+        t_min = -0.5 * t_bit
+        t_max = (n_bits + 0.5) * t_bit
+        t_axis = np.linspace(t_min, t_max, n_samples)
+
+        # Построить идеальный NRZ сигнал (прямоугольные импульсы)
+        y_ideal = np.zeros_like(t_axis)
+        for i, bit in enumerate(bit_sequence):
+            mask = (t_axis >= i * t_bit) & (t_axis < (i + 1) * t_bit)
+            y_ideal[mask] = peak_in if bit == 1 else 0.0
+
+        # Входной сигнал с небольшим размытием (свёртка с узким гауссом)
+        # Используем функцию ошибок для моделирования фронтов
+        y_in = np.zeros_like(t_axis)
+        for i, bit in enumerate(bit_sequence):
+            t_start = i * t_bit
+            t_end = (i + 1) * t_bit
+
+            # Передний фронт (0→1 или остаёмся на уровне)
+            if bit == 1:
+                y_in += 0.5 * peak_in * (1 + erf((t_axis - t_start) / (sigma_in * np.sqrt(2))))
+
+            # Задний фронт (1→0)
+            if bit == 1:
+                y_in -= 0.5 * peak_in * (1 + erf((t_axis - t_end) / (sigma_in * np.sqrt(2))))
+
+        # Выходной сигнал с сильным размытием (дисперсия)
+        y_out = np.zeros_like(t_axis)
+        for i, bit in enumerate(bit_sequence):
+            t_start = i * t_bit
+            t_end = (i + 1) * t_bit
+
+            if bit == 1:
+                y_out += 0.5 * peak_out * (1 + erf((t_axis - t_start) / (sigma_out * np.sqrt(2))))
+                y_out -= 0.5 * peak_out * (1 + erf((t_axis - t_end) / (sigma_out * np.sqrt(2))))
+
+        # Рисовать
+        # Идеальный сигнал (пунктир)
+        axis.plot(t_axis, y_ideal, color="#BDBDBD", linewidth=1, linestyle="--",
+                 label="Идеальный NRZ", alpha=0.5)
+
+        # Входной сигнал
+        axis.fill_between(t_axis, y_in, color="#64B5F6", alpha=0.25)
+        axis.plot(t_axis, y_in, color="#1E88E5", linewidth=2, label=f"Входной (σ={sigma_in:.2f} пс)")
+
+        # Выходной сигнал
+        axis.fill_between(t_axis, y_out, color="#FFB74D", alpha=0.25)
+        axis.plot(t_axis, y_out, color="#E53935", linewidth=2,
+                 label=f"Выходной (σ={sigma_out:.2f} пс, потери={metrics.net_loss_db:.1f} дБ)")
+
+        # Оформление
+        axis.set_title("NRZ импульсы: влияние ХД + ПМД на уширение", fontsize=10, fontweight="bold")
+        axis.set_xlabel("Время (пс)")
+        axis.set_ylabel("Нормализованная мощность")
+        axis.grid(True, linestyle="--", alpha=0.3)
+        axis.legend(loc="upper right", fontsize=8)
+        axis.set_xlim(t_min, t_max)
+
+        # Автоматический масштаб по Y
+        y_margin = peak_out * 0.15
+        axis.set_ylim(-y_margin, peak_in + y_margin)
+
+        # Добавить разметку битовых интервалов
+        for i in range(n_bits + 1):
+            t = i * t_bit
+            axis.axvline(t, color="gray", linestyle=":", alpha=0.3, linewidth=0.5)
+            if i < n_bits:
+                # Подписать биты
+                axis.text(t + t_bit/2, peak_in + y_margin * 0.85, str(bit_sequence[i]),
+                         ha="center", va="bottom", fontsize=9, color="#666")
+
+    def _plot_eye_diagram(self, axis, metrics):
+        """
+        Рисует диаграмму глаза (Eye Diagram) - это что видно на осциллографе!
+
+        Диаграмма показывает суперпозицию всех возможных битовых последовательностей.
+        Закрытие глаза = дисперсия уменьшает различимость битов.
+        """
+        import numpy as np
+        from scipy.special import erf
+
+        # Параметры
+        t_bit = metrics.t_bit_ps
+        sigma_in = metrics.sigma_in_ps
+        sigma_out = metrics.sigma_out_ps
+        peak_in = 1.0
+        peak_out = metrics.peak_ratio
+
+        # ВАЖНО: если sigma слишком мала относительно t_bit, используем упрощённую модель
+        # Для NRZ сигнала время нарастания фронта ~ 2.2 * sigma (10%-90%)
+        rise_time_in = 2.2 * sigma_in
+        rise_time_out = 2.2 * sigma_out
+
+        # Временная ось: расширяем до ±2.5*t_bit для полного покрытия
+        n_samples = 5000
+        t_axis = np.linspace(-2.5 * t_bit, 2.5 * t_bit, n_samples)
+
+        # Генерируем все 5-битовые последовательности для центрального бита
+        traces_high_in = []
+        traces_low_in = []
+        traces_high_out = []
+        traces_low_out = []
+
+        for a in [0, 1]:
+            for b in [0, 1]:
+                for c in [0, 1]:  # центральный бит
+                    for d in [0, 1]:
+                        for e in [0, 1]:
+                            y_in = np.zeros_like(t_axis)
+                            y_out = np.zeros_like(t_axis)
+
+                            # 5 битов: позиции [-2, -1, 0, 1, 2] * t_bit
+                            bit_sequence = [a, b, c, d, e]
+                            for bit_idx, bit_val in enumerate(bit_sequence):
+                                t_start = (bit_idx - 2) * t_bit
+                                t_end = (bit_idx - 1) * t_bit
+
+                                if bit_val == 1:
+                                    # Входной сигнал
+                                    sigma_eff_in = max(sigma_in, t_bit * 0.005)
+                                    y_in += 0.5 * peak_in * (1 + erf((t_axis - t_start) / (sigma_eff_in * np.sqrt(2))))
+                                    y_in -= 0.5 * peak_in * (1 + erf((t_axis - t_end) / (sigma_eff_in * np.sqrt(2))))
+
+                                    # Выходной сигнал
+                                    sigma_eff_out = max(sigma_out, t_bit * 0.02)
+                                    y_out += 0.5 * peak_out * (1 + erf((t_axis - t_start) / (sigma_eff_out * np.sqrt(2))))
+                                    y_out -= 0.5 * peak_out * (1 + erf((t_axis - t_end) / (sigma_eff_out * np.sqrt(2))))
+
+                            # Классифицируем по центральному биту (c)
+                            if c == 1:
+                                traces_high_in.append(y_in)
+                                traces_high_out.append(y_out)
+                            else:
+                                traces_low_in.append(y_in)
+                                traces_low_out.append(y_out)
+
+        # Рисуем только выходной сигнал (без входного)
+        for y_out in traces_high_out:
+            axis.plot(t_axis, y_out, color="#E53935", linewidth=1.5, alpha=0.6)
+        for y_out in traces_low_out:
+            axis.plot(t_axis, y_out, color="#FF9800", linewidth=1.5, alpha=0.6)
+
+        # Оформление
+        axis.set_title("Eye Diagram (глазковая диаграмма): влияние дисперсии на качество сигнала",
+                      fontsize=10, fontweight="bold")
+        axis.set_xlabel("Время в битовом интервале (пс)")
+        axis.set_ylabel("Нормализованная мощность")
+        axis.grid(True, linestyle="--", alpha=0.3)
+        # Показываем 4 битовых интервала (±2 t_bit) для полного отображения глаза
+        axis.set_xlim(-t_bit * 2, t_bit * 2)
+
+        # Автоматический масштаб по Y
+        y_margin = peak_out * 0.15
+        axis.set_ylim(-y_margin, peak_out + y_margin)
+
+        # Добавить пороговую линию
+        threshold = 0.5 * peak_out
+        axis.axhline(threshold, color="green", linestyle="--", alpha=0.7, linewidth=2,
+                    label=f"Порог решения ({threshold:.2f})")
+
+        # Вертикальные линии для центра битового интервала
+        axis.axvline(0, color="gray", linestyle=":", alpha=0.5, linewidth=1)
+        axis.text(0, peak_out + y_margin * 0.85, "Центр бита", ha="center", fontsize=8, color="gray")
+
+        # Добавить легенду
+        from matplotlib.patches import Patch
+        legend_elements = [
+            Patch(facecolor="#E53935", alpha=0.7, label="Выходной: бит=1"),
+            Patch(facecolor="#FF9800", alpha=0.7, label="Выходной: бит=0"),
+        ]
+        axis.legend(handles=legend_elements, loc="upper right", fontsize=8)
+
+        # Добавить метрики качества глаза
+        eye_info = (
+            f"σ_in = {sigma_in:.3f} пс (время нарастания ≈ {rise_time_in:.2f} пс)\n"
+            f"σ_out = {sigma_out:.3f} пс (время нарастания ≈ {rise_time_out:.2f} пс)\n"
+            f"Битовый интервал = {t_bit:.1f} пс\n"
+            f"Потери = {metrics.net_loss_db:.2f} дБ, пик = {peak_out:.3f}"
+        )
+        axis.text(0.02, 0.02, eye_info, transform=axis.transAxes,
+                 fontsize=7, verticalalignment='bottom',
+                 bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+
+    def _open_eye_diagram_window(self):
+        """Открывает глазковую диаграмму в отдельном большом окне."""
+        # Получить текущий выбранный канал
+        channel_id = self.selected_channel_id
+        if not channel_id:
+            QMessageBox.warning(self, "Нет канала", "Выберите канал в таблице для отображения глазковой диаграммы.")
+            return
+
+        channel = self.network.channels.get(channel_id)
+        result = self.dispersion_results.get(channel_id)
+
+        if not channel or not result:
+            QMessageBox.warning(self, "Нет данных", "Сначала рассчитайте дисперсию для выбранного канала.")
+            return
+
+        # Получить параметры из UI
+        modulation = str(self.disp_modulation_combo.currentData() or "nrz")
+        laser_type = str(self.disp_laser_combo.currentData() or "dfb")
+        laser_width_override = None
+        if hasattr(self, "disp_laser_width_override"):
+            raw = float(self.disp_laser_width_override.value())
+            laser_width_override = raw if raw > 0 else None
+
+        # Рассчитать метрики
+        budget = self.power_budget_results.get(channel.channel_id)
+        metrics = self.dispersion_visualizer.pulse_metrics(
+            self.network,
+            channel,
+            result,
+            modulation=modulation,  # type: ignore[arg-type]
+            laser_type=laser_type,  # type: ignore[arg-type]
+            laser_width_nm_override=laser_width_override,
+            budget=budget,
+        )
+
+        # Создать и показать окно
+        dialog = EyeDiagramDialog(self, metrics, channel_id, modulation, laser_type)
+        dialog.exec_()
 
     def refresh_dwdm_tables(self):
         self._refresh_channel_selectors()
