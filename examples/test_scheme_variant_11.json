@@ -154,7 +154,7 @@
       "target_node_id": "VLA",
       "length_km": 178.57,
       "fiber_type": "G.655",
-      "attenuation_db_per_km": 0.22,
+      "attenuation_db_per_km": 0.21,
       "splice_losses_db": 0.02,
       "splice_interval_km": 25.0,
       "connector_losses_db": 0.35,
@@ -195,7 +195,7 @@
       "source_node_id": "MSK",
       "target_node_id": "YAR",
       "length_km": 249.8,
-      "fiber_type": "G.655",
+      "fiber_type": "G.652",
       "attenuation_db_per_km": 0.22,
       "splice_losses_db": 0.02,
       "splice_interval_km": 25.0,
@@ -294,7 +294,7 @@
       "target_node_id": "NNG",
       "length_km": 245.63,
       "fiber_type": "G.655",
-      "attenuation_db_per_km": 0.22,
+      "attenuation_db_per_km": 0.21,
       "splice_losses_db": 0.02,
       "splice_interval_km": 25.0,
       "connector_losses_db": 0.35,
@@ -308,7 +308,7 @@
       "target_node_id": "NNG",
       "length_km": 223.54,
       "fiber_type": "G.655",
-      "attenuation_db_per_km": 0.22,
+      "attenuation_db_per_km": 0.21,
       "splice_losses_db": 0.02,
       "splice_interval_km": 25.0,
       "connector_losses_db": 0.35,
@@ -364,7 +364,7 @@
       "target_node_id": "CHB",
       "length_km": 201.43,
       "fiber_type": "G.655",
-      "attenuation_db_per_km": 0.22,
+      "attenuation_db_per_km": 0.21,
       "splice_losses_db": 0.02,
       "splice_interval_km": 25.0,
       "connector_losses_db": 0.35,
@@ -378,7 +378,7 @@
       "target_node_id": "KZN",
       "length_km": 121.88,
       "fiber_type": "G.655",
-      "attenuation_db_per_km": 0.22,
+      "attenuation_db_per_km": 0.21,
       "splice_losses_db": 0.02,
       "splice_interval_km": 25.0,
       "connector_losses_db": 0.35,
@@ -403,12 +403,65 @@
   ],
   "channels": [
     {
-      "channel_id": "CH_MSK_KZN_100G",
+      "channel_id": "CH_MSK_VLA_10G",
       "wavelength_nm": 1550.12,
       "tx_power_dbm": 0.0,
-      "rx_sensitivity_dbm": -40.0,
-      "bitrate_gbps": 100.0,
-      "energy_budget_db": 40.0,
+      "rx_sensitivity_dbm": -28.0,
+      "bitrate_gbps": 10.0,
+      "energy_budget_db": 28.0,
+      "osnr_db": 25.0,
+      "path": [
+        "MSK",
+        "VLA"
+      ]
+    },
+    {
+      "channel_id": "CH_VLA_NNG_10G",
+      "wavelength_nm": 1530.0,
+      "tx_power_dbm": 0.0,
+      "rx_sensitivity_dbm": -28.0,
+      "bitrate_gbps": 10.0,
+      "energy_budget_db": 28.0,
+      "osnr_db": 22.0,
+      "path": [
+        "VLA",
+        "NNG"
+      ]
+    },
+    {
+      "channel_id": "CH_NNG_CHB_10G",
+      "wavelength_nm": 1540.0,
+      "tx_power_dbm": 0.0,
+      "rx_sensitivity_dbm": -28.0,
+      "bitrate_gbps": 10.0,
+      "energy_budget_db": 28.0,
+      "osnr_db": 20.0,
+      "path": [
+        "NNG",
+        "CHB"
+      ]
+    },
+    {
+      "channel_id": "CH_CHB_KZN_10G",
+      "wavelength_nm": 1490.0,
+      "tx_power_dbm": 0.0,
+      "rx_sensitivity_dbm": -28.0,
+      "bitrate_gbps": 10.0,
+      "energy_budget_db": 28.0,
+      "osnr_db": 18.0,
+      "path": [
+        "CHB",
+        "KZN"
+      ]
+    },
+    {
+      "channel_id": "CH_MSK_KZN_10G",
+      "wavelength_nm": 1560.0,
+      "tx_power_dbm": 0.0,
+      "rx_sensitivity_dbm": -28.0,
+      "bitrate_gbps": 10.0,
+      "energy_budget_db": 28.0,
+      "osnr_db": 15.0,
       "path": [
         "MSK",
         "VLA",
@@ -418,48 +471,18 @@
       ]
     },
     {
-      "channel_id": "CH_KLG_VLG_40G",
-      "wavelength_nm": 1530.0,
+      "channel_id": "CH_KLG_VLG_10G",
+      "wavelength_nm": 1570.0,
       "tx_power_dbm": 0.0,
-      "rx_sensitivity_dbm": -38.0,
-      "bitrate_gbps": 40.0,
-      "energy_budget_db": 38.0,
+      "rx_sensitivity_dbm": -28.0,
+      "bitrate_gbps": 10.0,
+      "energy_budget_db": 28.0,
+      "osnr_db": 16.0,
       "path": [
         "KLG",
         "MSK",
         "YAR",
         "VLG"
-      ]
-    },
-    {
-      "channel_id": "CH_TVR_CHB_100G",
-      "wavelength_nm": 1540.0,
-      "tx_power_dbm": 0.0,
-      "rx_sensitivity_dbm": -40.0,
-      "bitrate_gbps": 100.0,
-      "energy_budget_db": 40.0,
-      "path": [
-        "TVR",
-        "YAR",
-        "IVN",
-        "VLA",
-        "NNG",
-        "CHB"
-      ]
-    },
-    {
-      "channel_id": "CH_TUL_KST_10G",
-      "wavelength_nm": 1490.0,
-      "tx_power_dbm": 0.0,
-      "rx_sensitivity_dbm": -36.0,
-      "bitrate_gbps": 10.0,
-      "energy_budget_db": 36.0,
-      "path": [
-        "TUL",
-        "RZN",
-        "VLA",
-        "IVN",
-        "KST"
       ]
     }
   ],

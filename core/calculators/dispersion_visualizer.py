@@ -47,6 +47,10 @@ class PulseMetrics:
     total_length_km: float
     group_delay_s: float
 
+    # SNR параметры для eye diagram
+    osnr_db: Optional[float] = None
+    snr_linear: Optional[float] = None
+
 
 class DispersionVisualizer:
     # Типовые спектральные ширины (порядки) — параметр источника, а не скорости.
@@ -146,6 +150,7 @@ class DispersionVisualizer:
         laser_type: LaserType = "dfb",
         laser_width_nm_override: Optional[float] = None,
         budget: Optional[PowerBudgetResult] = None,
+        osnr_result: Optional[object] = None,
     ) -> PulseMetrics:
         bitrate = float(dispersion.bitrate_gbps)
         t_bit_ps = 1000.0 / bitrate if bitrate > 0 else 100.0
@@ -192,6 +197,24 @@ class DispersionVisualizer:
         total_length_km = sum(max(float(fr.length_km), 0.0) for fr in dispersion.fiber_results)
         group_delay_s = self.group_delay_s(network, channel, dispersion)
 
+        # Вычисляем SNR из OSNR
+        # Приоритет: 1) переданный osnr_result, 2) channel.osnr_db, 3) None
+        osnr_db = None
+        if osnr_result is not None and hasattr(osnr_result, 'osnr_db'):
+            osnr_db = osnr_result.osnr_db
+        elif channel.osnr_db is not None:
+            osnr_db = channel.osnr_db
+
+        snr_linear = None
+        if osnr_db is not None and osnr_db > 0:
+            # Преобразуем OSNR (дБ) в линейный SNR
+            # SNR = OSNR для идеального случая (без учета полосы приемника)
+            # Для более точного расчета можно учесть отношение полос:
+            # SNR = OSNR * (B_ref / B_electrical), где B_ref = 12.5 ГГц (стандарт)
+            # B_electrical ≈ 0.7 * bitrate для NRZ
+            snr_linear = 10 ** (osnr_db / 10.0)
+            print(f"DEBUG SNR: OSNR = {osnr_db:.2f} дБ, SNR_linear = {snr_linear:.2f}")
+
         return PulseMetrics(
             bitrate_gbps=bitrate,
             t_bit_ps=t_bit_ps,
@@ -206,4 +229,6 @@ class DispersionVisualizer:
             peak_ratio=peak_ratio,
             total_length_km=total_length_km,
             group_delay_s=group_delay_s,
+            osnr_db=osnr_db,
+            snr_linear=snr_linear,
         )

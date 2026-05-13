@@ -4,7 +4,7 @@
 
 ---
 
-## 📑 Содержание
+## Содержание
 
 1. [Обзор архитектуры](#обзор-архитектуры)
 2. [Структура проекта](#структура-проекта)
@@ -107,6 +107,7 @@ PROTO/
 **Назначение:** Представление данных сети в виде Python объектов.
 
 **Компоненты:**
+
 - `Network` - контейнер для всех объектов
 - `Node` - узел сети (город, точка присутствия)
 - `Fiber` - волоконная линия между узлами
@@ -115,12 +116,14 @@ PROTO/
 - `Traffic` - требования по трафику
 
 **Особенности:**
+
 - Используются `@dataclass` для автоматической генерации `__init__`, `__repr__`
 - Все модели immutable где возможно
 - Валидация данных в `__post_init__`
 - Методы расчета базовых параметров (например, `calculate_fiber_loss()`)
 
 **Пример:**
+
 ```python
 @dataclass
 class Fiber:
@@ -129,7 +132,7 @@ class Fiber:
     target_node_id: str
     length_km: float
     fiber_type: FiberType = FiberType.G652
-    
+
     def calculate_fiber_loss(self) -> float:
         # Логика расчета потерь
         pass
@@ -169,7 +172,7 @@ class Fiber:
 
 - **TopologyManager** - управление топологией
   - Построение графа NetworkX
-  - Поиск маршрутов (Dijkstra, A*)
+  - Поиск маршрутов (Dijkstra, A\*)
   - Валидация связности
 
 - **TopologyAnalyzer** - анализ топологии
@@ -196,6 +199,7 @@ class Fiber:
 **Назначение:** Взаимодействие с пользователем.
 
 **Технологии:**
+
 - **PyQt5** - основной фреймворк GUI
 - **QtWebEngineView** - встраивание веб-контента
 - **Folium** - интерактивные карты (Leaflet.js)
@@ -204,14 +208,18 @@ class Fiber:
 **Компоненты:**
 
 #### MainWindow
+
 Главное окно приложения:
+
 - Меню (Файл, Правка, Вид, Симуляция, Справка)
 - Панель инструментов
 - Статус-бар
 - Центральный виджет (MapWidget)
 
 #### MapWidget
+
 Основной виджет с вкладками:
+
 - **Карта** - интерактивная карта Folium
 - **Топология** - граф сети, таблицы узлов/линий
 - **Трафик** - матрица трафика, загрузка линий
@@ -219,6 +227,7 @@ class Fiber:
 - **Бюджет мощности** - таблица бюджета, запасы
 
 **Взаимодействие GUI ↔ Core:**
+
 ```python
 # GUI вызывает Core
 simulation_manager = SimulationManager(network)
@@ -300,7 +309,7 @@ def calculate_dispersion(channel: Channel, path_fibers: List[Fiber]):
     # 1. Получить параметры источника
     laser_type = channel.laser_type
     spectral_width = get_spectral_width(laser_type)
-    
+
     # 2. Рассчитать ХД для каждого сегмента
     total_cd = 0.0
     for fiber in path_fibers:
@@ -308,7 +317,7 @@ def calculate_dispersion(channel: Channel, path_fibers: List[Fiber]):
         L = fiber.length_km
         cd_segment = D * L  # пс/нм
         total_cd += cd_segment
-    
+
     # 3. Рассчитать ПМД (RSS метод)
     pmd_squared_sum = 0.0
     for fiber in path_fibers:
@@ -316,11 +325,11 @@ def calculate_dispersion(channel: Channel, path_fibers: List[Fiber]):
         L = fiber.length_km
         pmd_squared_sum += (D_pmd * sqrt(L)) ** 2
     total_pmd = sqrt(pmd_squared_sum)
-    
+
     # 4. Проверить лимиты
     cd_limit = get_cd_limit(channel.bitrate_gbps)
     pmd_limit = get_pmd_limit(channel.bitrate_gbps)
-    
+
     return DispersionResult(
         total_cd=total_cd,
         total_pmd=total_pmd,
@@ -386,7 +395,7 @@ self.web_view.page().setWebChannel(channel)
 ```python
 class SimulationManager(QObject):
     progress_updated = pyqtSignal(int)  # Signal
-    
+
     def run_simulation(self):
         for i, step in enumerate(steps):
             # Выполнение шага
@@ -409,10 +418,10 @@ class Network:
     def __init__(self):
         self.nodes: Dict[str, Node] = {}
         self.fibers: Dict[str, Fiber] = {}
-    
+
     def add_node(self, node: Node):
         self.nodes[node.node_id] = node
-    
+
     def get_node(self, node_id: str) -> Optional[Node]:
         return self.nodes.get(node_id)
 ```
@@ -451,7 +460,7 @@ class EquipmentFactory:
 ```python
 class SimulationManager(QObject):
     finished = pyqtSignal(dict)  # Observer pattern
-    
+
     def run(self):
         results = self._do_simulation()
         self.finished.emit(results)  # Notify observers
@@ -544,12 +553,14 @@ json.dump(data, file)
 ### Добавление нового типа волокна
 
 1. Добавить в `FiberType` enum:
+
 ```python
 class FiberType(Enum):
     G658 = "G.658"  # Новый тип
 ```
 
 2. Добавить параметры в словари:
+
 ```python
 ATTENUATION_MAP = {
     FiberType.G658: 0.20,
@@ -565,17 +576,19 @@ DISPERSION_COEFF_MAP = {
 ### Добавление нового калькулятора
 
 1. Создать класс в `core/calculators/`:
+
 ```python
 class NonlinearEffectsCalculator:
     def __init__(self, network: Network):
         self.network = network
-    
+
     def calculate_spm(self, channel: Channel) -> float:
         # Self-Phase Modulation
         pass
 ```
 
 2. Интегрировать в `SimulationManager`:
+
 ```python
 class SimulationManager:
     def run_simulation(self):
@@ -589,6 +602,7 @@ class SimulationManager:
 ### Добавление нового формата экспорта
 
 1. Создать функцию в `utils/`:
+
 ```python
 def export_to_excel(network: Network, results: dict, filepath: str):
     import pandas as pd
@@ -596,6 +610,7 @@ def export_to_excel(network: Network, results: dict, filepath: str):
 ```
 
 2. Добавить пункт меню в `MainWindow`:
+
 ```python
 export_excel_action = QAction("Экспорт в Excel", self)
 export_excel_action.triggered.connect(self.on_export_excel)
@@ -709,7 +724,7 @@ class TestFiberLoss(unittest.TestCase):
             length_km=100.0,
             fiber_type=FiberType.G652
         )
-        
+
         loss = fiber.calculate_fiber_loss()
         expected = 100 * 0.22 + 3 * 0.02 + 2 * 0.3  # fiber + splices + connectors
         self.assertAlmostEqual(loss, expected, places=2)
@@ -726,11 +741,11 @@ def add_fiber(self, fiber: Fiber):
     # Проверка существования узлов
     if fiber.source_node_id not in self.nodes:
         raise ValueError(f"Source node {fiber.source_node_id} not found")
-    
+
     # Проверка корректности длины
     if fiber.length_km <= 0:
         raise ValueError("Fiber length must be positive")
-    
+
     self.fibers[fiber.fiber_id] = fiber
 ```
 
@@ -772,18 +787,21 @@ class SimulationManager:
 ## Будущие улучшения
 
 ### Краткосрочные (v1.1)
+
 - [ ] Добавить расчет нелинейных эффектов (SPM, XPM)
 - [ ] Реализовать автоматическую маршрутизацию трафика
 - [ ] Добавить экспорт в Excel/PDF
-- [ ] Улучшить визуализацию дисперсии (Eye Diagram)
+- [x] Улучшить визуализацию дисперсии (Eye Diagram) — добавлен учет SNR/OSNR
 
 ### Среднесрочные (v1.5)
+
 - [ ] Поддержка многопоточности для больших сетей
 - [ ] Интеграция с реальными API операторов
 - [ ] Веб-версия симулятора
 - [ ] Плагинная архитектура для расширений
 
 ### Долгосрочные (v2.0)
+
 - [ ] Машинное обучение для оптимизации маршрутов
 - [ ] Симуляция отказов и резервирования
 - [ ] Интеграция с системами мониторинга
@@ -794,6 +812,7 @@ class SimulationManager:
 ## Заключение
 
 Архитектура DWDM Network Simulator спроектирована с учетом:
+
 - **Модульности** - легко добавлять новые компоненты
 - **Тестируемости** - каждый модуль можно тестировать независимо
 - **Расширяемости** - простое добавление новых типов оборудования и расчетов

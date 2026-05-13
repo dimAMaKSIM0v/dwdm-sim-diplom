@@ -131,6 +131,10 @@ class EyeDiagramDialog(QDialog):
         peak_in = 1.0
         peak_out = self.metrics.peak_ratio
 
+        # SNR параметры
+        snr_linear = self.metrics.snr_linear
+        osnr_db = self.metrics.osnr_db
+
         # Эффективные sigma для видимости
         rise_time_in = 2.2 * sigma_in
         rise_time_out = 2.2 * sigma_out
@@ -179,11 +183,31 @@ class EyeDiagramDialog(QDialog):
                                 traces_low_in.append(y_in)
                                 traces_low_out.append(y_out)
 
-        # Рисуем только выходной сигнал (без входного)
+        # Вычисляем уровень шума на основе SNR
+        noise_std = 0.0
+        if snr_linear is not None and snr_linear > 0:
+            # Стандартное отклонение шума: σ_noise = A_signal / √SNR
+            # Используем пиковую амплитуду выходного сигнала
+            noise_std = peak_out / np.sqrt(snr_linear)
+            print(f"DEBUG Eye Diagram: SNR_linear = {snr_linear:.2f}, noise_std = {noise_std:.6f}")
+
+        # Рисуем только выходной сигнал (без входного) с добавлением шума
         for y_out in traces_high_out:
-            axis.plot(t_axis, y_out, color="#E53935", linewidth=2.5, alpha=0.7)
+            # Добавляем гауссов шум к каждой трассе
+            if noise_std > 0:
+                noise = np.random.normal(0, noise_std, len(y_out))
+                y_out_noisy = y_out + noise
+            else:
+                y_out_noisy = y_out
+            axis.plot(t_axis, y_out_noisy, color="#E53935", linewidth=2.5, alpha=0.7)
+
         for y_out in traces_low_out:
-            axis.plot(t_axis, y_out, color="#FF9800", linewidth=2.5, alpha=0.7)
+            if noise_std > 0:
+                noise = np.random.normal(0, noise_std, len(y_out))
+                y_out_noisy = y_out + noise
+            else:
+                y_out_noisy = y_out
+            axis.plot(t_axis, y_out_noisy, color="#FF9800", linewidth=2.5, alpha=0.7)
 
         # Оформление
         axis.set_title("Eye Diagram (глазковая диаграмма): влияние дисперсии на качество сигнала",
@@ -217,7 +241,16 @@ class EyeDiagramDialog(QDialog):
         axis.legend(handles=legend_elements, loc="upper right", fontsize=11)
 
         # Информационная панель
+        snr_info = ""
+        if osnr_db is not None:
+            snr_info = f"OSNR = {osnr_db:.2f} дБ"
+            if snr_linear is not None:
+                snr_db = 10 * np.log10(snr_linear) if snr_linear > 0 else 0
+                snr_info += f", SNR ≈ {snr_db:.2f} дБ (linear: {snr_linear:.1f})"
+            snr_info += "\n"
+
         eye_info = (
+            f"{snr_info}"
             f"σ_in = {sigma_in:.3f} пс (время нарастания ≈ {rise_time_in:.2f} пс)\n"
             f"σ_out = {sigma_out:.3f} пс (время нарастания ≈ {rise_time_out:.2f} пс)\n"
             f"Битовый интервал = {t_bit:.1f} пс\n"
@@ -2248,8 +2281,8 @@ class MapWidget(QWidget):
         # Вариант 1: Temporal (временная диаграмма импульсов)
         # self._plot_nrz_sequence(axis, metrics)
 
-        # Вариант 2: Eye Diagram (глазковая диаграмма)
-        self._plot_eye_diagram(axis, metrics)
+        # График OSNR vs расстояние
+        self._plot_osnr_vs_distance(axis, metrics, channel.channel_id)
 
         # --- Добавить информацию ---
         axis.text(
@@ -2368,117 +2401,105 @@ class MapWidget(QWidget):
                 axis.text(t + t_bit/2, peak_in + y_margin * 0.85, str(bit_sequence[i]),
                          ha="center", va="bottom", fontsize=9, color="#666")
 
-    def _plot_eye_diagram(self, axis, metrics):
+    def _plot_osnr_vs_distance(self, axis, metrics, channel_id):
         """
-        Рисует диаграмму глаза (Eye Diagram) - это что видно на осциллографе!
+        Рисует график зависимости OSNR от расстояния.
 
-        Диаграмма показывает суперпозицию всех возможных битовых последовательностей.
-        Закрытие глаза = дисперсия уменьшает различимость битов.
+        Показывает деградацию OSNR по мере распространения сигнала через сеть.
         """
         import numpy as np
-        from scipy.special import erf
 
-        # Параметры
-        t_bit = metrics.t_bit_ps
-        sigma_in = metrics.sigma_in_ps
-        sigma_out = metrics.sigma_out_ps
-        peak_in = 1.0
-        peak_out = metrics.peak_ratio
+        # Получаем канал и его маршрут
+        channel = self.network.channels.get(channel_id)
+        if not channel or not channel.path:
+            axis.text(0.5, 0.5, "Нет данных о маршруте канала",
+                     ha='center', va='center', transform=axis.transAxes)
+            return
 
-        # ВАЖНО: если sigma слишком мала относительно t_bit, используем упрощённую модель
-        # Для NRZ сигнала время нарастания фронта ~ 2.2 * sigma (10%-90%)
-        rise_time_in = 2.2 * sigma_in
-        rise_time_out = 2.2 * sigma_out
+        # Получаем волокна на маршруте
+        fibers = self.network.get_path_fibers(channel.path)
+        if not fibers:
+            axis.text(0.5, 0.5, "Нет волокон на маршруте",
+                     ha='center', va='center', transform=axis.transAxes)
+            return
 
-        # Временная ось: расширяем до ±2.5*t_bit для полного покрытия
-        n_samples = 5000
-        t_axis = np.linspace(-2.5 * t_bit, 2.5 * t_bit, n_samples)
+        # Рассчитываем OSNR в каждой точке маршрута
+        distances = [0.0]  # Начальная точка
+        osnr_values = [40.0]  # Начальный OSNR (передатчик)
+        node_names = [channel.path[0]]
 
-        # Генерируем все 5-битовые последовательности для центрального бита
-        traces_high_in = []
-        traces_low_in = []
-        traces_high_out = []
-        traces_low_out = []
+        cumulative_distance = 0.0
+        current_osnr_linear = 10 ** (40.0 / 10.0)  # Начальный OSNR в линейных единицах
 
-        for a in [0, 1]:
-            for b in [0, 1]:
-                for c in [0, 1]:  # центральный бит
-                    for d in [0, 1]:
-                        for e in [0, 1]:
-                            y_in = np.zeros_like(t_axis)
-                            y_out = np.zeros_like(t_axis)
+        # Параметры по умолчанию
+        nf_db = 5.0  # Коэффициент шума EDFA
 
-                            # 5 битов: позиции [-2, -1, 0, 1, 2] * t_bit
-                            bit_sequence = [a, b, c, d, e]
-                            for bit_idx, bit_val in enumerate(bit_sequence):
-                                t_start = (bit_idx - 2) * t_bit
-                                t_end = (bit_idx - 1) * t_bit
+        for i, fiber in enumerate(fibers):
+            # Добавляем расстояние
+            cumulative_distance += fiber.length_km
 
-                                if bit_val == 1:
-                                    # Входной сигнал
-                                    sigma_eff_in = max(sigma_in, t_bit * 0.005)
-                                    y_in += 0.5 * peak_in * (1 + erf((t_axis - t_start) / (sigma_eff_in * np.sqrt(2))))
-                                    y_in -= 0.5 * peak_in * (1 + erf((t_axis - t_end) / (sigma_eff_in * np.sqrt(2))))
+            # Потери в пролете
+            span_loss_db = fiber.calculate_fiber_loss()
 
-                                    # Выходной сигнал
-                                    sigma_eff_out = max(sigma_out, t_bit * 0.02)
-                                    y_out += 0.5 * peak_out * (1 + erf((t_axis - t_start) / (sigma_eff_out * np.sqrt(2))))
-                                    y_out -= 0.5 * peak_out * (1 + erf((t_axis - t_end) / (sigma_eff_out * np.sqrt(2))))
+            # После пролета (до усилителя) - сигнал ослабляется, шум остается
+            # OSNR ухудшается пропорционально потерям
+            signal_loss_linear = 10 ** (-span_loss_db / 10.0)
+            current_osnr_linear *= signal_loss_linear
 
-                            # Классифицируем по центральному биту (c)
-                            if c == 1:
-                                traces_high_in.append(y_in)
-                                traces_high_out.append(y_out)
-                            else:
-                                traces_low_in.append(y_in)
-                                traces_low_out.append(y_out)
+            # Усилитель добавляет ASE шум
+            # Упрощенная модель: каждый усилитель добавляет фиксированный шум
+            gain_db = span_loss_db  # Компенсируем потери
+            gain_linear = 10 ** (gain_db / 10.0)
+            nf_linear = 10 ** (nf_db / 10.0)
 
-        # Рисуем только выходной сигнал (без входного)
-        for y_out in traces_high_out:
-            axis.plot(t_axis, y_out, color="#E53935", linewidth=1.5, alpha=0.6)
-        for y_out in traces_low_out:
-            axis.plot(t_axis, y_out, color="#FF9800", linewidth=1.5, alpha=0.6)
+            # ASE шум от усилителя (упрощенная формула)
+            # Новый OSNR после усилителя
+            if current_osnr_linear > 0:
+                # 1/OSNR_out = 1/OSNR_in + (NF * (G-1)) / (G * OSNR_in)
+                # Упрощенно: OSNR деградирует на ~NF каждый усилитель
+                ase_contribution = nf_linear / current_osnr_linear
+                current_osnr_linear = 1.0 / (1.0 / current_osnr_linear + ase_contribution)
+
+            # Записываем значение
+            distances.append(cumulative_distance)
+            osnr_db = 10 * np.log10(current_osnr_linear) if current_osnr_linear > 0 else 0.0
+            osnr_values.append(osnr_db)
+            node_names.append(fiber.target_node_id)
+
+        # Рисуем график
+        axis.plot(distances, osnr_values, 'b-o', linewidth=2, markersize=6, label='OSNR')
+
+        # Добавляем пороговые линии
+        axis.axhline(y=15, color='red', linestyle='--', linewidth=1.5, alpha=0.7, label='Минимум (15 дБ)')
+        axis.axhline(y=20, color='orange', linestyle='--', linewidth=1.5, alpha=0.7, label='Приемлемо (20 дБ)')
+        axis.axhline(y=25, color='green', linestyle='--', linewidth=1.5, alpha=0.7, label='Хорошо (25 дБ)')
+
+        # Подписываем узлы
+        for i, (dist, osnr, node) in enumerate(zip(distances, osnr_values, node_names)):
+            if i % 2 == 0:  # Подписываем каждый второй узел для читаемости
+                axis.annotate(node, (dist, osnr),
+                            textcoords="offset points", xytext=(0, 10),
+                            ha='center', fontsize=8, color='blue')
 
         # Оформление
-        axis.set_title("Eye Diagram (глазковая диаграмма): влияние дисперсии на качество сигнала",
+        axis.set_title(f"Деградация OSNR вдоль маршрута канала {channel_id}",
                       fontsize=10, fontweight="bold")
-        axis.set_xlabel("Время в битовом интервале (пс)")
-        axis.set_ylabel("Нормализованная мощность")
+        axis.set_xlabel("Расстояние (км)", fontsize=9)
+        axis.set_ylabel("OSNR (дБ)", fontsize=9)
         axis.grid(True, linestyle="--", alpha=0.3)
-        # Показываем 4 битовых интервала (±2 t_bit) для полного отображения глаза
-        axis.set_xlim(-t_bit * 2, t_bit * 2)
+        axis.legend(loc='best', fontsize=8)
 
-        # Автоматический масштаб по Y
-        y_margin = peak_out * 0.15
-        axis.set_ylim(-y_margin, peak_out + y_margin)
+        # Устанавливаем пределы по Y
+        axis.set_ylim(10, 45)
 
-        # Добавить пороговую линию
-        threshold = 0.5 * peak_out
-        axis.axhline(threshold, color="green", linestyle="--", alpha=0.7, linewidth=2,
-                    label=f"Порог решения ({threshold:.2f})")
+        # Добавляем информацию
+        info_text = f"Итоговый OSNR: {osnr_values[-1]:.1f} дБ\n"
+        info_text += f"Общая длина: {cumulative_distance:.1f} км\n"
+        info_text += f"Усилителей: {len(fibers)}"
 
-        # Вертикальные линии для центра битового интервала
-        axis.axvline(0, color="gray", linestyle=":", alpha=0.5, linewidth=1)
-        axis.text(0, peak_out + y_margin * 0.85, "Центр бита", ha="center", fontsize=8, color="gray")
-
-        # Добавить легенду
-        from matplotlib.patches import Patch
-        legend_elements = [
-            Patch(facecolor="#E53935", alpha=0.7, label="Выходной: бит=1"),
-            Patch(facecolor="#FF9800", alpha=0.7, label="Выходной: бит=0"),
-        ]
-        axis.legend(handles=legend_elements, loc="upper right", fontsize=8)
-
-        # Добавить метрики качества глаза
-        eye_info = (
-            f"σ_in = {sigma_in:.3f} пс (время нарастания ≈ {rise_time_in:.2f} пс)\n"
-            f"σ_out = {sigma_out:.3f} пс (время нарастания ≈ {rise_time_out:.2f} пс)\n"
-            f"Битовый интервал = {t_bit:.1f} пс\n"
-            f"Потери = {metrics.net_loss_db:.2f} дБ, пик = {peak_out:.3f}"
-        )
-        axis.text(0.02, 0.02, eye_info, transform=axis.transAxes,
-                 fontsize=7, verticalalignment='bottom',
-                 bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+        axis.text(0.98, 0.02, info_text, transform=axis.transAxes,
+                 fontsize=8, verticalalignment='bottom', horizontalalignment='right',
+                 bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.7))
 
     def _open_eye_diagram_window(self):
         """Открывает глазковую диаграмму в отдельном большом окне."""
