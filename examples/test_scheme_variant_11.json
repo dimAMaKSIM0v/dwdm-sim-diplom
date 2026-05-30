@@ -409,7 +409,6 @@
       "rx_sensitivity_dbm": -28.0,
       "bitrate_gbps": 10.0,
       "energy_budget_db": 28.0,
-      "osnr_db": 25.0,
       "path": [
         "MSK",
         "VLA"
@@ -422,7 +421,6 @@
       "rx_sensitivity_dbm": -28.0,
       "bitrate_gbps": 10.0,
       "energy_budget_db": 28.0,
-      "osnr_db": 22.0,
       "path": [
         "VLA",
         "NNG"
@@ -435,7 +433,6 @@
       "rx_sensitivity_dbm": -28.0,
       "bitrate_gbps": 10.0,
       "energy_budget_db": 28.0,
-      "osnr_db": 20.0,
       "path": [
         "NNG",
         "CHB"
@@ -448,7 +445,6 @@
       "rx_sensitivity_dbm": -28.0,
       "bitrate_gbps": 10.0,
       "energy_budget_db": 28.0,
-      "osnr_db": 18.0,
       "path": [
         "CHB",
         "KZN"
@@ -461,7 +457,6 @@
       "rx_sensitivity_dbm": -28.0,
       "bitrate_gbps": 10.0,
       "energy_budget_db": 28.0,
-      "osnr_db": 15.0,
       "path": [
         "MSK",
         "VLA",
@@ -477,7 +472,6 @@
       "rx_sensitivity_dbm": -28.0,
       "bitrate_gbps": 10.0,
       "energy_budget_db": 28.0,
-      "osnr_db": 16.0,
       "path": [
         "KLG",
         "MSK",

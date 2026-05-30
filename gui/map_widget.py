@@ -1118,7 +1118,7 @@ class MapWidget(QWidget):
         layout = QVBoxLayout()
 
         self.excel_line_calc_table = QTableWidget()
-        self.excel_line_calc_table.setColumnCount(33)
+        self.excel_line_calc_table.setColumnCount(37)
         self.excel_line_calc_table.setHorizontalHeaderLabels(
             [
                 "№ п/п",
@@ -1154,6 +1154,11 @@ class MapWidget(QWidget):
                 "ПМД, пс",
                 "Лим. ПМД, пс",
                 "ПМД",
+                "BER",
+                "Q-фактор",
+                "OSNR_eff, дБ",
+                "Штраф ХД, дБ",
+                "Штраф ПМД, дБ",
             ]
         )
         self.excel_line_calc_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
@@ -2409,12 +2414,20 @@ class MapWidget(QWidget):
         """
         import numpy as np
 
+        print(f"\n{'='*60}")
+        print(f"DEBUG: График OSNR для канала {channel_id}")
+        print(f"{'='*60}")
+
         # Получаем канал и его маршрут
         channel = self.network.channels.get(channel_id)
         if not channel or not channel.path:
             axis.text(0.5, 0.5, "Нет данных о маршруте канала",
                      ha='center', va='center', transform=axis.transAxes)
             return
+
+        print(f"Маршрут: {' -> '.join(channel.path)}")
+        print(f"Начальный OSNR из JSON: {channel.osnr_db} дБ")
+        print(f"Начальная мощность Tx: {channel.tx_power_dbm} дБм")
 
         # Получаем волокна на маршруте
         fibers = self.network.get_path_fibers(channel.path)
@@ -2423,51 +2436,102 @@ class MapWidget(QWidget):
                      ha='center', va='center', transform=axis.transAxes)
             return
 
+        print(f"Количество пролетов: {len(fibers)}")
+
         # Рассчитываем OSNR в каждой точке маршрута
         distances = [0.0]  # Начальная точка
         osnr_values = [40.0]  # Начальный OSNR (передатчик)
         node_names = [channel.path[0]]
 
         cumulative_distance = 0.0
-        current_osnr_linear = 10 ** (40.0 / 10.0)  # Начальный OSNR в линейных единицах
+
+        # Начальная мощность сигнала (дБм)
+        signal_power_dbm = channel.tx_power_dbm
+
+        # Накопленная мощность ASE шума (в линейных единицах, мВт)
+        # Начальный шум от передатчика (очень мал)
+        initial_osnr_linear = 10 ** (40.0 / 10.0)  # OSNR = 40 дБ
+        signal_power_mw = 10 ** (signal_power_dbm / 10.0)
+        ase_noise_mw = signal_power_mw / initial_osnr_linear
 
         # Параметры по умолчанию
         nf_db = 5.0  # Коэффициент шума EDFA
+        nf_linear = 10 ** (nf_db / 10.0)
+
+        print(f"\nНачальный OSNR: 40.0 дБ (передатчик)")
+        print(f"Начальная мощность сигнала: {signal_power_dbm:.2f} дБм ({signal_power_mw:.6f} мВт)")
+        print(f"Начальный шум ASE: {10*np.log10(ase_noise_mw):.2f} дБм ({ase_noise_mw:.9f} мВт)")
 
         for i, fiber in enumerate(fibers):
+            print(f"\n--- Пролет {i+1}: {fiber.source_node_id} -> {fiber.target_node_id} ---")
+
             # Добавляем расстояние
             cumulative_distance += fiber.length_km
+            print(f"Длина пролета: {fiber.length_km:.2f} км")
+            print(f"Накопленное расстояние: {cumulative_distance:.2f} км")
 
             # Потери в пролете
             span_loss_db = fiber.calculate_fiber_loss()
+            span_loss_linear = 10 ** (span_loss_db / 10.0)
+            print(f"Потери в пролете: {span_loss_db:.2f} дБ")
 
-            # После пролета (до усилителя) - сигнал ослабляется, шум остается
-            # OSNR ухудшается пропорционально потерям
-            signal_loss_linear = 10 ** (-span_loss_db / 10.0)
-            current_osnr_linear *= signal_loss_linear
+            # После пролета: и сигнал, и шум ослабляются одинаково
+            signal_power_dbm -= span_loss_db
+            signal_power_mw /= span_loss_linear
+            ase_noise_mw /= span_loss_linear
 
-            # Усилитель добавляет ASE шум
-            # Упрощенная модель: каждый усилитель добавляет фиксированный шум
+            osnr_after_span = signal_power_mw / ase_noise_mw if ase_noise_mw > 0 else 1e6
+            print(f"После пролета: сигнал = {signal_power_dbm:.2f} дБм, шум = {10*np.log10(ase_noise_mw):.2f} дБм")
+            print(f"OSNR после пролета: {10*np.log10(osnr_after_span):.2f} дБ")
+
+            # Усилитель компенсирует потери и добавляет ASE шум
             gain_db = span_loss_db  # Компенсируем потери
             gain_linear = 10 ** (gain_db / 10.0)
-            nf_linear = 10 ** (nf_db / 10.0)
 
-            # ASE шум от усилителя (упрощенная формула)
-            # Новый OSNR после усилителя
-            if current_osnr_linear > 0:
-                # 1/OSNR_out = 1/OSNR_in + (NF * (G-1)) / (G * OSNR_in)
-                # Упрощенно: OSNR деградирует на ~NF каждый усилитель
-                ase_contribution = nf_linear / current_osnr_linear
-                current_osnr_linear = 1.0 / (1.0 / current_osnr_linear + ase_contribution)
+            print(f"Усиление EDFA: {gain_db:.2f} дБ")
+            print(f"Коэффициент шума NF: {nf_db:.2f} дБ")
+
+            # Усиливаем сигнал
+            signal_power_dbm += gain_db
+            signal_power_mw *= gain_linear
+
+            # Добавляем ASE шум от усилителя
+            # P_ASE = n_sp * h * nu * (G - 1) * B_ref
+            # Упрощенно: P_ASE ≈ (NF - 1) * G * h * nu * B_ref
+            # Еще проще: P_ASE_mW ≈ (NF_linear - 1) * signal_power_before_amp_mW
+
+            # ASE шум пропорционален (NF-1) и мощности сигнала до усилителя
+            signal_before_amp_mw = signal_power_mw / gain_linear
+            ase_from_amp_mw = (nf_linear - 1) * signal_before_amp_mw
+            ase_noise_mw += ase_from_amp_mw
+
+            print(f"ASE от усилителя: {10*np.log10(ase_from_amp_mw):.2f} дБм ({ase_from_amp_mw:.9f} мВт)")
+            print(f"Суммарный шум: {10*np.log10(ase_noise_mw):.2f} дБм ({ase_noise_mw:.9f} мВт)")
 
             # Записываем значение
             distances.append(cumulative_distance)
-            osnr_db = 10 * np.log10(current_osnr_linear) if current_osnr_linear > 0 else 0.0
+            osnr_linear = signal_power_mw / ase_noise_mw if ase_noise_mw > 0 else 1e6
+            osnr_db = 10 * np.log10(osnr_linear)
             osnr_values.append(osnr_db)
             node_names.append(fiber.target_node_id)
 
+            print(f"После усилителя: сигнал = {signal_power_dbm:.2f} дБм, OSNR = {osnr_db:.2f} дБ")
+
+        print(f"\n{'='*60}")
+        print(f"ИТОГО:")
+        print(f"  Финальный OSNR: {osnr_values[-1]:.2f} дБ")
+        print(f"  Общая длина: {cumulative_distance:.2f} км")
+        print(f"  Усилителей: {len(fibers)}")
+        print(f"  OSNR из JSON: {channel.osnr_db} дБ")
+        print(f"{'='*60}\n")
+
         # Рисуем график
-        axis.plot(distances, osnr_values, 'b-o', linewidth=2, markersize=6, label='OSNR')
+        axis.plot(distances, osnr_values, 'b-o', linewidth=2, markersize=6, label='OSNR (расчетный)')
+
+        # Если есть OSNR из JSON, показываем его как горизонтальную линию
+        if channel.osnr_db is not None:
+            axis.axhline(y=channel.osnr_db, color='purple', linestyle='-.', linewidth=2,
+                        alpha=0.7, label=f'OSNR из JSON ({channel.osnr_db:.1f} дБ)')
 
         # Добавляем пороговые линии
         axis.axhline(y=15, color='red', linestyle='--', linewidth=1.5, alpha=0.7, label='Минимум (15 дБ)')
@@ -2493,7 +2557,9 @@ class MapWidget(QWidget):
         axis.set_ylim(10, 45)
 
         # Добавляем информацию
-        info_text = f"Итоговый OSNR: {osnr_values[-1]:.1f} дБ\n"
+        info_text = f"Итоговый OSNR (расчет): {osnr_values[-1]:.1f} дБ\n"
+        if channel.osnr_db is not None:
+            info_text += f"OSNR из JSON: {channel.osnr_db:.1f} дБ\n"
         info_text += f"Общая длина: {cumulative_distance:.1f} км\n"
         info_text += f"Усилителей: {len(fibers)}"
 
@@ -2524,7 +2590,17 @@ class MapWidget(QWidget):
             raw = float(self.disp_laser_width_override.value())
             laser_width_override = raw if raw > 0 else None
 
-        # Рассчитать метрики
+        # Рассчитать OSNR для канала
+        from core.calculators.osnr_calculator import OSNRCalculator
+        osnr_calc = OSNRCalculator(self.network)
+        osnr_result = osnr_calc.calculate_osnr(channel)
+
+        print(f"\n{'='*60}")
+        print(f"DEBUG: Eye Diagram для канала {channel_id}")
+        print(f"Рассчитанный OSNR: {osnr_result.osnr_db:.2f} дБ")
+        print(f"{'='*60}\n")
+
+        # Рассчитать метрики с учетом OSNR
         budget = self.power_budget_results.get(channel.channel_id)
         metrics = self.dispersion_visualizer.pulse_metrics(
             self.network,
@@ -2534,6 +2610,7 @@ class MapWidget(QWidget):
             laser_type=laser_type,  # type: ignore[arg-type]
             laser_width_nm_override=laser_width_override,
             budget=budget,
+            osnr_result=osnr_result,  # Передаем рассчитанный OSNR
         )
 
         # Создать и показать окно
@@ -2864,6 +2941,18 @@ class MapWidget(QWidget):
             else:
                 disp_values = ["-"] * 7
 
+            # Расчет BER
+            ber_values = ["-"] * 5
+            if channel.channel_id in self.simulation_manager.ber_results:
+                ber_result = self.simulation_manager.ber_results[channel.channel_id]
+                ber_values = [
+                    f"{ber_result.ber:.2e}",
+                    self._fmt_calc_value(ber_result.q_factor, 3),
+                    self._fmt_calc_value(ber_result.osnr_eff_db, 2),
+                    self._fmt_calc_value(ber_result.dispersion_penalty_db, 3),
+                    self._fmt_calc_value(ber_result.pmd_penalty_db, 3),
+                ]
+
             values = prefix_values + [
                 self._fmt_calc_value(energy_budget_db, 1),
                 self._fmt_calc_value(line_length_km, 1),
@@ -2886,11 +2975,12 @@ class MapWidget(QWidget):
                 fiber_type_text,
                 self._fmt_calc_value(float(channel.wavelength_nm), 3),
                 self._fmt_calc_value(float(channel.bitrate_gbps), 1),
-            ] + disp_values
+            ] + disp_values + ber_values
 
             compare_col_idx = 18
             cd_status_col = 29
             pmd_status_col = 32
+            ber_col = 33
             for col_idx, value in enumerate(values):
                 item = QTableWidgetItem(value)
                 if col_idx == compare_col_idx and compare_state == "no":
@@ -2905,6 +2995,14 @@ class MapWidget(QWidget):
                     item.setForeground(Qt.red)
                 if col_idx == pmd_status_col and value == "OK":
                     item.setForeground(Qt.darkGreen)
+                if col_idx == ber_col and value != "-":
+                    ber_val = float(value)
+                    if ber_val < 1e-12:
+                        item.setForeground(Qt.darkGreen)
+                    elif ber_val < 1e-9:
+                        item.setForeground(Qt.darkYellow)
+                    else:
+                        item.setForeground(Qt.red)
                 self.excel_line_calc_table.setItem(row_idx, col_idx, item)
 
     @staticmethod

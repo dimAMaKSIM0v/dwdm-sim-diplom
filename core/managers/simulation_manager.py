@@ -7,6 +7,7 @@ from core.models.network import Network
 from core.calculators.power_budget import calculate_all_power_budgets, PowerBudgetResult
 from core.calculators.amplifier_placer import AmplifierPlacer
 from core.calculators.frequency_plan import FrequencyPlan
+from core.calculators.ber_calculator import BERCalculator, BERResult
 
 
 class SimulationManager:
@@ -19,6 +20,7 @@ class SimulationManager:
         """
         self.network = network
         self.power_budget_results: Dict[str, PowerBudgetResult] = {}
+        self.ber_results: Dict[str, BERResult] = {}
     
     def run_simulation(self, auto_place_amplifiers: bool = True) -> dict:
         """
@@ -70,7 +72,23 @@ class SimulationManager:
             for ch_id, res in self.power_budget_results.items()
         }
         
-        # 5. Проверка частотного плана
+        # 5. Расчет BER для всех каналов
+        ber_calc = BERCalculator(self.network)
+        self.ber_results = ber_calc.calculate_all()
+        results['ber_results'] = {
+            ch_id: {
+                'ber': res.ber,
+                'q_factor': res.q_factor,
+                'osnr_eff_db': res.osnr_eff_db,
+                'osnr_db': res.osnr_db,
+                'dispersion_penalty_db': res.dispersion_penalty_db,
+                'pmd_penalty_db': res.pmd_penalty_db,
+                'is_valid': res.is_valid
+            }
+            for ch_id, res in self.ber_results.items()
+        }
+        
+        # 6. Проверка частотного плана
         freq_warnings = FrequencyPlan.validate_wavelength_assignment(self.network)
         results['warnings'].extend(freq_warnings)
         
@@ -86,10 +104,15 @@ class SimulationManager:
         
         avg_margin = sum(r.power_margin_db for r in self.power_budget_results.values()) / total_channels if total_channels > 0 else 0
         
+        # BER статистика
+        ber_valid_channels = sum(1 for r in self.ber_results.values() if r.is_valid) if self.ber_results else 0
+        
         return {
             'total_channels': total_channels,
             'valid_channels': valid_channels,
             'invalid_channels': total_channels - valid_channels,
-            'average_power_margin_db': avg_margin
+            'average_power_margin_db': avg_margin,
+            'ber_valid_channels': ber_valid_channels,
+            'ber_invalid_channels': total_channels - ber_valid_channels,
         }
 
